@@ -87,6 +87,9 @@ resource "coder_agent" "main" {
     #!/bin/bash
     set -e
 
+    # NOTE: hook harness (orchestration/plugin/hooks/install.sh) is intentionally
+    # not installed for this role — nexus is the controller, not a hooked worker.
+
     # Fix orchestration directory ownership (shared volume is created as root)
     sudo chown -R coder:coder /home/coder/.openflows
 

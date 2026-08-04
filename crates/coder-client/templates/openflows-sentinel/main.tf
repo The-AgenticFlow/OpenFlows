@@ -63,9 +63,9 @@ resource "coder_agent" "main" {
     OWNER_ID="${data.coder_workspace_owner.me.id}"
     
     if [ -n "$$CODER_URL" ] && [ -n "$$CODER_AGENT_TOKEN" ] && [ -n "$$OWNER_ID" ]; then
-      GITHUB_TOKEN=$$(curl -s \
-        -H "Coder-Session-Token: $$CODER_AGENT_TOKEN" \
-        "$$CODER_URL/api/v2/users/$$OWNER_ID/gitauths/github" 2>/dev/null \
+      GITHUB_TOKEN=$(curl -s \
+        -H "Coder-Session-Token: $CODER_AGENT_TOKEN" \
+        "$CODER_URL/api/v2/users/$OWNER_ID/gitauths/github" 2>/dev/null \
         | jq -r '.access_token // empty')
       
       # Fallback to env var if API call fails
@@ -97,13 +97,25 @@ resource "coder_agent" "main" {
       echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: Failed to download openflows-harness — agent will not be able to coordinate" >&2
     }
 
+    # Provision the OpenFlows hook harness for the agent CLI via the shared
+    # installer in the orchestration volume (single source of truth for hook
+    # wiring across all role templates). Failure is non-fatal.
+    ROLE="${var.role}"
+    ROLE_BASE="$${ROLE%-*}"   # sentinel-1 -> sentinel
+    /home/coder/.openflows/orchestration/plugin/hooks/install.sh "$ROLE" \
+      || log "WARNING: hook installation failed — continuing without hooks"
+
     # Start heartbeat daemon (the ONLY Redis client in the workspace)
     export REDIS_URL="${var.redis_url}"
     export OPENFLOWS_TENANT="${var.tenant}"
     export OPENFLOWS_TICKET="${var.ticket_id}"
-    export OPENFLOWS_ROLE="${var.role}"
+    # OPENFLOWS_ROLE must be the BASE role (sentinel), not the worker id
+    # (sentinel-1): the controller writes dispatch and reads heartbeats under
+    # the base-role key, so a worker-id role would never match.
+    export OPENFLOWS_ROLE="$ROLE_BASE"
     export CODER_WORKSPACE_ID="${data.coder_workspace.me.id}"
     nohup openflows-harness heartbeat start >/dev/null 2>&1 &
+    log "Heartbeat daemon started (role=$ROLE_BASE ticket=$OPENFLOWS_TICKET)"
   EOT
 }
 
@@ -118,6 +130,14 @@ resource "docker_container" "workspace" {
   volumes {
     container_path = "/home/coder/workspace"
     volume_name    = docker_volume.workspace.name
+  }
+
+  # Mount shared orchestration files (agent definitions, skills, standards, hooks)
+  # This volume is created by the Nexus workspace
+  volumes {
+    container_path = "/home/coder/.openflows/orchestration"
+    volume_name    = "openflows-orchestration-${var.tenant}"
+    read_only      = true
   }
 
   env = [

@@ -362,17 +362,24 @@ async fn run_tenant_clean(action: &TenantCommands) -> Result<()> {
 
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
-    let store = match pocketflow_core::SharedStore::new_redis(&redis_url).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("  ✗ Redis error: {}", e);
-            return Ok(());
-        }
-    };
+    // Bind the store explicitly to this tenant instead of relying on the
+    // OPENFLOWS_TENANT env var. SharedStore::get/set/keys already prepend
+    // `ns:{tenant}:` internally, so all keys below must be bare (no manual
+    // `ns:{name}:` prefix) or they double-namespace and silently operate on
+    // a key nothing else ever reads (e.g. `ns:default:ns:default:tickets`).
+    let store =
+        match pocketflow_core::SharedStore::new_redis_with_tenant(&redis_url, Some(name.clone()))
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("  ✗ Redis error: {}", e);
+                return Ok(());
+            }
+        };
 
-    let tickets_key = format!("ns:{}:tickets", name);
     let mut tickets: Vec<serde_json::Value> =
-        store.get_typed(&tickets_key).await.unwrap_or_default();
+        store.get_typed(config::KEY_TICKETS).await.unwrap_or_default();
 
     let mut reset_count = 0;
 
@@ -407,7 +414,7 @@ async fn run_tenant_clean(action: &TenantCommands) -> Result<()> {
 
     if reset_count > 0 {
         store
-            .set(&tickets_key, serde_json::to_value(&tickets)?)
+            .set(config::KEY_TICKETS, serde_json::to_value(&tickets)?)
             .await;
         println!("  ✓ Reset {} ticket(s) to Open", reset_count);
     } else {
@@ -415,19 +422,25 @@ async fn run_tenant_clean(action: &TenantCommands) -> Result<()> {
     }
 
     // Also clear recovery attempt counters
-    let recovery_pattern = format!("ns:{}:ticket:*:recovery_attempts", name);
-    let recovery_keys: Vec<String> = store.keys(&recovery_pattern).await;
+    let recovery_keys: Vec<String> = store.keys("ticket:*:recovery_attempts").await;
     let recovery_count = recovery_keys.len();
     for key in &recovery_keys {
-        store.del(key).await;
+        // store.keys() returns fully-namespaced keys (ns:{tenant}:...); del()
+        // will re-namespace, so strip the prefix we already have before
+        // passing it back through the tenant-scoped store.
+        let bare = key
+            .strip_prefix(&format!("ns:{}:", name))
+            .unwrap_or(key.as_str());
+        store.del(bare).await;
     }
     if recovery_count > 0 {
         println!("  ✓ Cleared {} recovery counters", recovery_count);
     }
 
     // Clear worker_slots to prevent stale workspace IDs triggering premature provisioning
-    let worker_slots_key = format!("ns:{}:worker_slots", name);
-    store.set(&worker_slots_key, serde_json::json!({})).await;
+    store
+        .set(config::KEY_WORKER_SLOTS, serde_json::json!({}))
+        .await;
     println!("  ✓ Cleared worker slots (stale workspace references)");
 
     println!("  ✓ Tenant '{}' cleaned", name);

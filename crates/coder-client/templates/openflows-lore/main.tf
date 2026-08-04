@@ -55,6 +55,9 @@ resource "coder_agent" "main" {
     #!/bin/bash
     set -e
 
+    # NOTE: hook harness (orchestration/plugin/hooks/install.sh) is intentionally
+    # not installed for this role — lore's documentation flow is not yet hook-driven.
+
     log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $$*" >&2; }
 
     # Setup git credentials: get token from workspace owner via Coder API
@@ -63,9 +66,9 @@ resource "coder_agent" "main" {
     OWNER_ID="${data.coder_workspace_owner.me.id}"
     
     if [ -n "$$CODER_URL" ] && [ -n "$$CODER_AGENT_TOKEN" ] && [ -n "$$OWNER_ID" ]; then
-      GITHUB_TOKEN=$$(curl -s \
-        -H "Coder-Session-Token: $$CODER_AGENT_TOKEN" \
-        "$$CODER_URL/api/v2/users/$$OWNER_ID/gitauths/github" 2>/dev/null \
+      GITHUB_TOKEN=$(curl -s \
+        -H "Coder-Session-Token: $CODER_AGENT_TOKEN" \
+        "$CODER_URL/api/v2/users/$OWNER_ID/gitauths/github" 2>/dev/null \
         | jq -r '.access_token // empty')
       
       # Fallback to env var if API call fails

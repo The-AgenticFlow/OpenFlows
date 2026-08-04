@@ -49,6 +49,9 @@ resource "coder_agent" "main" {
     #!/bin/bash
     set -e
 
+    # NOTE: hook harness (orchestration/plugin/hooks/install.sh) is intentionally
+    # not installed for this role — vessel's merge flow is not yet hook-driven.
+
     # git pull or clone (creds via Coder external auth)
     if [ -d /home/coder/workspace/.git ]; then
       cd /home/coder/workspace && git pull 2>/dev/null || true

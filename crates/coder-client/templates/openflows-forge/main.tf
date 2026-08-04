@@ -103,67 +103,13 @@ resource "coder_agent" "main" {
       exit 1
     fi
 
-    # Provision the OpenFlows hook harness for the agent CLI so the agent
-    # loop is controllable end-to-end: session start reads the dispatch,
-    # tool-use guards enforce policy, and Stop refuses to end the session
-    # until the flow artifacts (status/handoff/PR) exist.
+    # Provision the OpenFlows hook harness for the agent CLI via the shared
+    # installer in the orchestration volume (single source of truth for hook
+    # wiring across all role templates). Failure is non-fatal.
     ROLE="${data.coder_parameter.role.value}"
     ROLE_BASE="$${ROLE%-*}"   # forge-1 -> forge
-    HOOKS_SRC="/home/coder/.openflows/orchestration/plugin/hooks/$ROLE_BASE"
-    HOOKS_DIR="/home/coder/.openflows/hooks"
-    if [ -d "$HOOKS_SRC" ]; then
-      mkdir -p "$HOOKS_DIR"
-      cp -r "$HOOKS_SRC/." "$HOOKS_DIR/"
-      chmod +x "$HOOKS_DIR"/*.sh 2>/dev/null || true
-      log "Installed $ROLE_BASE hooks from orchestration volume"
-    else
-      log "WARNING: no hooks found for role $ROLE_BASE at $HOOKS_SRC"
-    fi
-
-    # Wire hooks into the Claude Code agent loop (settings.json). Only events
-    # whose scripts exist are registered, so this works for every role.
-    mkdir -p /home/coder/.claude
-    python3 - "$HOOKS_DIR" /home/coder/.claude/settings.json <<'PYEOF'
-    import json, os, sys
-    hooks_dir, settings_path = sys.argv[1], sys.argv[2]
-    def cmd(name):
-        path = os.path.join(hooks_dir, name)
-        return path if os.path.isfile(path) else None
-    event_map = {
-        "SessionStart": [(None, "session_start.sh")],
-        "PreToolUse": [("Bash", "pre_bash_guard.sh"),
-                        ("Bash", "pre_bash_readonly_guard.sh"),
-                        ("Write|Edit|MultiEdit", "pre_write_check.sh")],
-        "PostToolUse": [("Write|Edit|MultiEdit", "post_write_lint.sh"),
-                         ("Write|Edit|MultiEdit", "post_write_validate.sh")],
-        "PreCompact": [(None, "pre_compact_handoff.sh")],
-        "Stop": [(None, "stop_require_artifact.sh"),
-                  (None, "stop_require_eval.sh")],
-        "SubagentStop": [(None, "subagent_stop.sh")],
-    }
-    hooks = {}
-    for event, entries in event_map.items():
-        matchers = []
-        for matcher, script in entries:
-            path = cmd(script)
-            if not path:
-                continue
-            entry = {"hooks": [{"type": "command", "command": path}]}
-            if matcher:
-                entry["matcher"] = matcher
-            matchers.append(entry)
-        if matchers:
-            hooks[event] = matchers
-    settings = {}
-    if os.path.exists(settings_path):
-        try:
-            settings = json.load(open(settings_path))
-        except Exception:
-            settings = {}
-    settings["hooks"] = hooks
-    json.dump(settings, open(settings_path, "w"), indent=2)
-    print(f"wrote {settings_path} with {len(hooks)} hook events", file=sys.stderr)
-    PYEOF
+    /home/coder/.openflows/orchestration/plugin/hooks/install.sh "$ROLE" \
+      || log "WARNING: hook installation failed — continuing without hooks"
 
     # Setup git credentials: get token from workspace owner via Coder API
     # The agent token is injected by Coder as CODER_AGENT_TOKEN env var
