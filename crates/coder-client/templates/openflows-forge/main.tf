@@ -86,15 +86,32 @@ resource "coder_agent" "main" {
       # REQUIRED — without it the agent cannot coordinate (dispatch/status/
       # heartbeat), so a missing harness must fail the startup script loudly
       # instead of leaving a silently uncoordinated workspace.
-      HARNESS_URL="https://github.com/Kilo-Org/openflows/releases/download/v${var.harness_version}/openflows-harness-v${var.harness_version}-x86_64-unknown-linux-musl"
-      log "Downloading openflows-harness v${var.harness_version}..."
+      # The release workflow (see .github/workflows/release.yml) publishes a
+      # tarball named openflows-{VERSION}-{PLATFORM}.tar.gz containing the full
+      # binary suite. The harness binary is inside at openflows-harness under
+      # the archive root, and is extracted directly (no full tarball extraction).
+      HARNESS_PLATFORM="x86_64-unknown-linux-musl"
+      HARNESS_URL="https://github.com/The-AgenticFlow/openflows/releases/download/v$${var.harness_version}/openflows-v$${var.harness_version}-$${HARNESS_PLATFORM}.tar.gz"
+      HARNESS_TMP="/tmp/openflows-$${var.harness_version}.tar.gz"
+      log "Downloading OpenFlows release v$${var.harness_version} for $$HARNESS_PLATFORM}..."
       for attempt in 1 2 3; do
-        if curl -fsSL --retry 3 "$HARNESS_URL" -o /tmp/openflows-harness; then
-          sudo mv /tmp/openflows-harness "$HARNESS_BIN"
-          sudo chmod +x "$HARNESS_BIN"
-          break
+        if curl -fsSL --retry 3 "$HARNESS_URL" -o "$HARNESS_TMP"; then
+          # Extract only the harness binary from the tarball (fast, avoids
+          # extracting the orchestration/ and docs/ directories)
+          ARCHIVE_DIR="openflows-v$${var.harness_version}-$${HARNESS_PLATFORM}"
+          EXTRACTED_HARNESS="/tmp/$${ARCHIVE_DIR}/openflows-harness"
+          if tar -xzf "$HARNESS_TMP" -C /tmp "$${ARCHIVE_DIR}/openflows-harness" 2>/dev/null \
+             && [ -f "$EXTRACTED_HARNESS" ]; then
+            sudo mv "$EXTRACTED_HARNESS" "$HARNESS_BIN"
+            sudo chmod +x "$HARNESS_BIN"
+            rm -f "$HARNESS_TMP"
+            break
+          else
+            log "Harness binary not found in archive — trying alternate method..."
+            rm -f "$HARNESS_TMP"
+          fi
         fi
-        log "Harness download attempt $attempt failed; retrying in 5s..."
+        log "Download attempt $$attempt failed; retrying in 5s..."
         sleep 5
       done
     fi

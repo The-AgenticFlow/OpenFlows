@@ -142,6 +142,7 @@ jobs:
           --bin openflows-dashboard
           --bin openflows-doctor
           --bin anthropic-proxy
+          --bin openflows-harness
 
       - name: Create tarball
         run: |
@@ -150,7 +151,7 @@ jobs:
           ARCHIVE="openflows-${VERSION}-${PLATFORM}"
           mkdir -p "dist/${ARCHIVE}"
 
-          for bin in openflows openflows-setup openflows-dashboard openflows-doctor anthropic-proxy; do
+          for bin in openflows openflows-setup openflows-dashboard openflows-doctor anthropic-proxy openflows-harness; do
             cp "target/${{ matrix.target }}/release/${bin}" "dist/${ARCHIVE}/"
           done
 

@@ -59,13 +59,28 @@ resource "coder_agent" "main" {
       git clone ${var.repo_url} /home/coder/workspace 2>/dev/null || true
     fi
 
-    # Download and install openflows-harness (checksum-verified from GitHub release)
-    HARNESS_URL="https://github.com/Kilo-Org/openflows/releases/download/v${var.harness_version}/openflows-harness-v${var.harness_version}-x86_64-unknown-linux-musl"
+    # Download and extract openflows-harness from the release tarball.
+    # The release workflow publishes openflows-{VERSION}-{PLATFORM}.tar.gz
+    # containing all binaries including openflows-harness.
     HARNESS_BIN="/usr/local/bin/openflows-harness"
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Downloading openflows-harness v${var.harness_version}..." >&2
-    curl -fsSL "$HARNESS_URL" -o "$HARNESS_BIN" && chmod +x "$HARNESS_BIN" || {
+    HARNESS_PLATFORM="x86_64-unknown-linux-musl"
+    HARNESS_URL="https://github.com/The-AgenticFlow/openflows/releases/download/v${var.harness_version}/openflows-v${var.harness_version}-${HARNESS_PLATFORM}.tar.gz"
+    HARNESS_TMP="/tmp/openflows-${var.harness_version}.tar.gz"
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Downloading OpenFlows v${var.harness_version} ${HARNESS_PLATFORM}..." >&2
+    if curl -fsSL --retry 3 "$HARNESS_URL" -o "$HARNESS_TMP" 2>/dev/null; then
+      ARCHIVE_DIR="openflows-v${var.harness_version}-${HARNESS_PLATFORM}"
+      EXTRACTED="/tmp/${ARCHIVE_DIR}/openflows-harness"
+      if tar -xzf "$HARNESS_TMP" -C /tmp "${ARCHIVE_DIR}/openflows-harness" 2>/dev/null \
+         && [ -f "$EXTRACTED" ]; then
+        mv "$EXTRACTED" "$HARNESS_BIN" && chmod +x "$HARNESS_BIN"
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] openflows-harness installed successfully" >&2
+      else
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: Failed to extract harness from tarball" >&2
+      fi
+      rm -f "$HARNESS_TMP"
+    else
       echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: Failed to download openflows-harness — agent will not be able to coordinate" >&2
-    }
+    fi
 
     # Start heartbeat daemon (the ONLY Redis client in the workspace)
     export REDIS_URL="${var.redis_url}"
