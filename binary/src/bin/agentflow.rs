@@ -378,8 +378,10 @@ async fn run_tenant_clean(action: &TenantCommands) -> Result<()> {
             }
         };
 
-    let mut tickets: Vec<serde_json::Value> =
-        store.get_typed(config::KEY_TICKETS).await.unwrap_or_default();
+    let mut tickets: Vec<serde_json::Value> = store
+        .get_typed(config::KEY_TICKETS)
+        .await
+        .unwrap_or_default();
 
     let mut reset_count = 0;
 
@@ -435,6 +437,56 @@ async fn run_tenant_clean(action: &TenantCommands) -> Result<()> {
     }
     if recovery_count > 0 {
         println!("  ✓ Cleared {} recovery counters", recovery_count);
+    }
+
+    // On a full reset (--reset-all, used by prod.sh's clean-slate flow), also
+    // clear ticket-scoped chat/dispatch/status/workspace/heartbeat keys, as
+    // this command's own banner promises ("dispatch, status, chat, ...
+    // heartbeat records"). Without this, a stale ticket:{id}:chat:{role} key
+    // from a PREVIOUS run survives the reset. When Nexus later assigns the
+    // same ticket ID to a brand-new Coder workspace, create_chat_for_assignment
+    // finds the stale chat_id, sees it still reports "active" in Coder (bound
+    // to the old, now-destroyed workspace), and skips creating a chat for the
+    // new workspace entirely — leaving the new workspace's agent with no
+    // session ever spawned. Scoped to --reset-all only: the lighter
+    // `tenant clean` (no --reset-all, used to recover individual
+    // AwaitingHuman/Failed tickets) must not nuke chat/dispatch state for
+    // tickets that are not stale.
+    if *reset_all {
+        let ticket_scoped_patterns = [
+            "ticket:*:chat:*",
+            "ticket:*:chat_action:*",
+            "ticket:*:dispatch:*",
+            "ticket:*:status",
+            "ticket:*:workspace:*",
+            "ticket:*:review:*",
+            "ticket:*:deployment",
+            "ticket:*:diff_status:*",
+            "ticket:*:gate:*",
+            "ticket:*:pr",
+            "ticket:*:handoff",
+            "heartbeat:*",
+        ];
+        let mut cleared = 0usize;
+        for pattern in ticket_scoped_patterns {
+            let keys: Vec<String> = store.keys(pattern).await;
+            for key in &keys {
+                // store.keys() returns fully-namespaced keys (ns:{tenant}:...);
+                // del() re-namespaces, so strip the prefix first (see the
+                // recovery_attempts cleanup above for the same reasoning).
+                let bare = key
+                    .strip_prefix(&format!("ns:{}:", name))
+                    .unwrap_or(key.as_str());
+                store.del(bare).await;
+                cleared += 1;
+            }
+        }
+        if cleared > 0 {
+            println!(
+                "  ✓ Cleared {} stale ticket-scoped key(s) (chat, dispatch, status, workspace, heartbeat, etc.)",
+                cleared
+            );
+        }
     }
 
     // Clear worker_slots to prevent stale workspace IDs triggering premature provisioning
