@@ -42,7 +42,7 @@ variable "coder_url" {
 
 variable "harness_version" {
   type        = string
-  default     = "1.1.6"
+  default     = "1.1.7"
   description = "openflows-harness binary version to download"
 }
 
