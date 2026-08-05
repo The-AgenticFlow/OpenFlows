@@ -2733,11 +2733,18 @@ Use `openflows-harness` for all coordination:
                 .await
             {
                 Some(heartbeat) => {
-                    let now_ms = SystemTime::now()
+                    // HeartbeatRecord.ts is written by the harness using
+                    // `.as_secs()` (see openflows-harness/src/store.rs). Compare
+                    // against `.as_secs()` here too — mixing seconds with
+                    // milliseconds made every heartbeat's computed age come out
+                    // to ~1000x its real value (always far past the staleness
+                    // threshold), so every workspace was reported "crashed"
+                    // regardless of how recently it actually wrote a heartbeat.
+                    let now_secs = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
-                        .as_millis() as u64;
-                    let age_secs = now_ms.saturating_sub(heartbeat.ts) / 1_000;
+                        .as_secs();
+                    let age_secs = now_secs.saturating_sub(heartbeat.ts);
                     if heartbeat.status != "running" {
                         Some(format!(
                             "heartbeat status is {} for ws {}",
