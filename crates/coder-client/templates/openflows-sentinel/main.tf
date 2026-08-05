@@ -160,7 +160,10 @@ resource "docker_container" "workspace" {
     "REDIS_URL=${var.redis_url}",
     "OPENFLOWS_TENANT=${var.tenant}",
     "OPENFLOWS_TICKET=${var.ticket_id}",
-    "OPENFLOWS_ROLE=${var.role}",
+    # Base role (sentinel-1 -> sentinel): heartbeat keys are namespaced by base role.
+    # NOTE: The agent process (env block) and startup script must both use the same
+    # base role so the heartbeat key the daemon writes matches what Nexus reads:
+    "OPENFLOWS_ROLE=${replace(var.role, "/-[0-9]+$/", "")}",
     "CODER_WORKSPACE_ID=${data.coder_workspace.me.id}",
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
   ]

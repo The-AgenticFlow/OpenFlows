@@ -217,7 +217,9 @@ resource "docker_container" "workspace" {
     "REDIS_URL=${data.coder_parameter.redis_url.value}",
     "OPENFLOWS_TENANT=${data.coder_parameter.tenant.value}",
     "OPENFLOWS_TICKET=${data.coder_parameter.ticket_id.value}",
-    # Base role (forge-1 -> forge): harness Redis keys are namespaced by base role
+    # Base role (forge-1 -> forge): heartbeat keys and harness R/W are by base role.
+    # NOTE: The Coder agent process (env block) and the startup script's heartbeat
+    # daemon must both use the SAME base role:
     "OPENFLOWS_ROLE=${replace(data.coder_parameter.role.value, "/-[0-9]+$/", "")}",
     "CODER_WORKSPACE_ID=${data.coder_workspace.me.id}",
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",

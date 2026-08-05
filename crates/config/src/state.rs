@@ -156,13 +156,13 @@ pub const KEY_TICKET_RECOVERY_ATTEMPTS: &str = "recovery_attempts";
 /// Full key: `ticket:{id}:diff_status:{role}`
 pub const KEY_TICKET_DIFF_STATUS: &str = "diff_status";
 
-/// Heartbeat key pattern: `heartbeat:{role}-T-{ticket_id}`
+/// Heartbeat key pattern: `heartbeat:{role}:{ticket_id}`
 pub fn heartbeat_key(role: &str, ticket_id: &str) -> String {
-    format!("heartbeat:{}-T-{}", role, ticket_id)
+    format!("heartbeat:{}:{}", role, ticket_id)
 }
 
 /// Heartbeat payload written by each workspace.
-/// Stored as JSON under the `heartbeat:{role}-T-{ticket_id}` key.
+/// Stored as JSON under the `heartbeat:{role}:{ticket_id}` key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatRecord {
     pub ts: u64,
