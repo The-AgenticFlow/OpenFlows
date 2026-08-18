@@ -30,13 +30,24 @@ const GATED_PHASES: &[&str] = &["planning"];
 /// `review_ready` and bypassing the planning-gate review entirely.
 const ENTRY_PHASES: &[&str] = &["planning", "blocked"];
 
+/// Subkey under which each ticket's review-cycle epoch is stored. The epoch
+/// advances on every `status set planning`; a gate approval only remains valid
+/// while it matches the ticket's current epoch.
+const PLAN_EPOCH_SUBKEY: &str = "plan_epoch";
+
 /// Gate approval payload written by SENTINEL to allow FORGE to proceed.
+///
+/// `plan_epoch` is the review cycle the approval was granted for; it must match
+/// the ticket's current epoch to be consumable. `#[serde(default)]` keeps
+/// pre-epoch records readable (they deserialize as stale, epoch 0).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateApproval {
     pub phase: String,
     pub approved_by: String,
     pub ts: u64,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub plan_epoch: u64,
 }
 
 /// Valid verdicts for the `review submit` command.
@@ -131,6 +142,12 @@ pub fn gate_source_for_transition(current_phase: &str, target: &str) -> Option<&
     }
 }
 
+/// True iff an approval's epoch does not match the ticket's current review
+/// cycle. A stale approval must not authorize a transition.
+pub fn gate_approval_is_stale(plan_epoch: u64, current_epoch: u64) -> bool {
+    plan_epoch != current_epoch
+}
+
 impl HarnessStore {
     pub async fn new(redis_url: &str, tenant: &str) -> Result<Self> {
         let config = Config::from_url(redis_url)?;
@@ -145,6 +162,46 @@ impl HarnessStore {
     /// Build a tenant-namespaced key.
     fn key(&self, k: &str) -> String {
         format!("ns:{}:{}", self.tenant, k)
+    }
+
+    /// Redis key under which the review-cycle epoch for `ticket` is stored.
+    fn plan_epoch_key(&self, ticket: &str) -> String {
+        self.key(&full_ticket_key_flat(ticket, PLAN_EPOCH_SUBKEY))
+    }
+
+    /// Redis key under which the gate approval for `ticket`+`phase` is stored.
+    fn gate_key(&self, ticket: &str, phase: &str) -> String {
+        self.key(&format!("ticket:{}:gate:{}", ticket, phase))
+    }
+
+    /// Read the ticket's current review-cycle epoch (0 if never opened).
+    async fn plan_epoch(&self, ticket: &str) -> Result<u64> {
+        let val: Option<String> = self
+            .client
+            .get(&self.plan_epoch_key(ticket))
+            .await
+            .context("Redis GET failed while reading plan epoch")?;
+        match val {
+            Some(v) => v
+                .parse::<u64>()
+                .context("plan_epoch value in Redis was not a u64"),
+            None => Ok(0),
+        }
+    }
+
+    /// Advance the ticket's review-cycle epoch by one (opens a fresh cycle).
+    async fn bump_plan_epoch(&self, ticket: &str) -> Result<u64> {
+        let new: u64 = self
+            .client
+            .incr(&self.plan_epoch_key(ticket))
+            .await
+            .context("Redis INCR failed while advancing plan epoch")?;
+        info!(
+            ticket,
+            epoch = new,
+            "plan epoch advanced (fresh review window)"
+        );
+        Ok(new)
     }
 
     /// Read the dispatch payload for this ticket+role.
@@ -179,6 +236,10 @@ impl HarnessStore {
     /// (e.g. for a revised plan) requires a fresh SENTINEL review. A brand-new
     /// ticket with no prior status must enter via `planning` (or `blocked`),
     /// so it cannot short-circuit straight to `building` and skip the gate.
+    ///
+    /// Each `planning` signal opens a fresh review cycle (advancing the
+    /// ticket's epoch and clearing any prior approval); crossing the gate then
+    /// requires an approval whose epoch matches the current one.
     pub async fn status_set(&self, ticket: &str, role: &str, phase: &str) -> Result<()> {
         if !VALID_PHASES.contains(&phase) {
             bail!(
@@ -214,6 +275,25 @@ impl HarnessStore {
             );
         }
 
+        // Entering (or re-entering) `planning` opens a fresh review cycle:
+        // advance the epoch and clear any prior planning-gate approval so a
+        // stale approval cannot carry into the new cycle.
+        if phase == "planning" {
+            self.bump_plan_epoch(ticket).await?;
+            let old_gate_key = self.gate_key(ticket, "planning");
+            let existing: Option<String> = self
+                .client
+                .getdel(&old_gate_key)
+                .await
+                .context("Redis GETDEL failed while clearing stale planning gate")?;
+            if existing.is_some() {
+                info!(
+                    ticket,
+                    "Cleared prior planning gate approval on fresh review window"
+                );
+            }
+        }
+
         // For transitions that leave a gated phase, require a SENTINEL approval
         // and consume it atomically so the approval is single-use per planning
         // cycle even under concurrent transitions.
@@ -221,7 +301,7 @@ impl HarnessStore {
             .as_deref()
             .and_then(|cur| gate_source_for_transition(cur, phase))
         {
-            let gate_key = self.key(&format!("ticket:{}:gate:{}", ticket, source_phase));
+            let gate_key = self.gate_key(ticket, source_phase);
 
             // Atomically GET-and-DELETE the approval in a single Redis
             // command. Using separate GET then DEL would let two concurrent
@@ -251,11 +331,35 @@ impl HarnessStore {
                 );
             }
 
+            // The approval must belong to the current review cycle; a stale or
+            // pre-seeded record must not authorize this transition.
+            let approval: GateApproval = serde_json::from_str(
+                consumed_approval
+                    .as_deref()
+                    .expect("consumed_approval is Some (None case bails above)"),
+            )
+            .context("Consumed gate approval was not a valid GateApproval payload")?;
+            let current_epoch = self.plan_epoch(ticket).await?;
+            if gate_approval_is_stale(approval.plan_epoch, current_epoch) {
+                bail!(
+                    "Cannot transition from '{}' to '{}': gate approval is stale \
+                     (approval plan_epoch={}, current plan_epoch={}). SENTINEL must \
+                     re-review the current plan and run: openflows-harness gate approve \
+                     --phase {}.",
+                    source_phase,
+                    phase,
+                    approval.plan_epoch,
+                    current_epoch,
+                    source_phase
+                );
+            }
+
             info!(
                 ticket,
                 from = source_phase,
                 to = phase,
-                "Gate approval verified and consumed (GETDEL), allowing transition"
+                epoch = approval.plan_epoch,
+                "Gate approval verified (epoch match) and consumed (GETDEL), allowing transition"
             );
         }
 
@@ -329,6 +433,18 @@ impl HarnessStore {
             );
         }
 
+        // Reject approvals for cycles that were never opened (no epoch).
+        let current_epoch = self.plan_epoch(ticket).await?;
+        if current_epoch == 0 {
+            bail!(
+                "Cannot approve '{}' gate for ticket {}: no review cycle is open. \
+                 FORGE must run `openflows-harness status set planning` to open a \
+                 cycle (and write a plan) before SENTINEL can approve it.",
+                phase,
+                ticket
+            );
+        }
+
         let approval = GateApproval {
             phase: phase.to_string(),
             approved_by: role.to_string(),
@@ -337,23 +453,29 @@ impl HarnessStore {
                 .unwrap()
                 .as_secs(),
             notes: notes.map(|s| s.to_string()),
+            plan_epoch: current_epoch,
         };
 
-        let gate_key = self.key(&format!("ticket:{}:gate:{}", ticket, phase));
+        let gate_key = self.gate_key(ticket, phase);
         let json = serde_json::to_string(&approval)?;
         let _: Result<(), _> = self
             .client
             .set::<(), _, _>(&gate_key, json, None, None, false)
             .await;
 
-        println!("Gate approved: {} phase '{}' by {}", ticket, phase, role);
+        println!(
+            "Gate approved: {} phase '{}' by {} (plan_epoch={})",
+            ticket, phase, role, current_epoch
+        );
         info!(key = %gate_key, phase, role, "gate approved");
         Ok(())
     }
 
-    /// Check if a gated phase has been approved.
+    /// Check if a gated phase has been approved, surfacing whether the approval
+    /// is current or stale relative to the ticket's review-cycle epoch.
     pub async fn gate_status(&self, ticket: &str, phase: &str) -> Result<()> {
-        let gate_key = self.key(&format!("ticket:{}:gate:{}", ticket, phase));
+        let gate_key = self.gate_key(ticket, phase);
+        let current_epoch = self.plan_epoch(ticket).await?;
         let approval: Option<String> = self
             .client
             .get(&gate_key)
@@ -364,10 +486,23 @@ impl HarnessStore {
             Some(json) => {
                 let approval: GateApproval =
                     serde_json::from_str(&json).context("Failed to parse gate approval")?;
+                let stale = approval.plan_epoch != current_epoch;
                 println!(
-                    "✓ Gate '{}' approved by {} at {}",
-                    approval.phase, approval.approved_by, approval.ts
+                    "{} Gate '{}' approved by {} at {} (plan_epoch={}, current_plan_epoch={})",
+                    if stale { "⚠" } else { "✓" },
+                    approval.phase,
+                    approval.approved_by,
+                    approval.ts,
+                    approval.plan_epoch,
+                    current_epoch
                 );
+                if stale {
+                    println!(
+                        "  WARNING: this approval is STALE — it belongs to review cycle {} \
+                         but the ticket is now on cycle {}. It will NOT authorize a transition.",
+                        approval.plan_epoch, current_epoch
+                    );
+                }
                 if let Some(notes) = approval.notes {
                     println!("  Notes: {}", notes);
                 }
@@ -969,5 +1104,46 @@ mod tests {
         // out, the revised plan forces a fresh SENTINEL approval.
         assert_eq!(gate_source_for_transition("building", "planning"), None);
         assert_eq!(gate_source_for_transition("blocked", "planning"), None);
+    }
+
+    #[test]
+    fn test_gate_approval_staleness() {
+        // An approval is current only when its review-cycle epoch matches the
+        // ticket's current epoch. A past-cycle or pre-epoch (0) approval must
+        // never authorize the current build.
+        assert!(!gate_approval_is_stale(1, 1)); // current
+        assert!(gate_approval_is_stale(1, 2)); // prior cycle
+        assert!(gate_approval_is_stale(3, 1)); // newer than current (foreign)
+        assert!(gate_approval_is_stale(0, 1)); // legacy pre-epoch approval
+        assert!(gate_approval_is_stale(1, 0)); // no open cycle -> stale
+    }
+
+    #[test]
+    fn test_gate_approval_serde_roundtrip_with_epoch() {
+        let approval = GateApproval {
+            phase: "planning".to_string(),
+            approved_by: "sentinel".to_string(),
+            ts: 123,
+            notes: Some("looks good".to_string()),
+            plan_epoch: 7,
+        };
+        let json = serde_json::to_string(&approval).unwrap();
+        let decoded: GateApproval = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.phase, "planning");
+        assert_eq!(decoded.approved_by, "sentinel");
+        assert_eq!(decoded.ts, 123);
+        assert_eq!(decoded.plan_epoch, 7);
+    }
+
+    #[test]
+    fn test_gate_approval_legacy_json_defaults_stale_epoch() {
+        // Approvals written before the plan_epoch field existed (e.g. a
+        // pre-seeded gate) omit the field. It must deserialize with a default
+        // of 0 so such legacy approvals are read safely AND treated as stale
+        // against any real open cycle (epoch >= 1).
+        let legacy = r#"{"phase":"planning","approved_by":"sentinel","ts":123,"notes":null}"#;
+        let decoded: GateApproval = serde_json::from_str(legacy).unwrap();
+        assert_eq!(decoded.plan_epoch, 0);
+        assert!(gate_approval_is_stale(decoded.plan_epoch, 1));
     }
 }
