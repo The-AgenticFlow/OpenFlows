@@ -47,6 +47,13 @@ pub const ACTION_REVIEW_READY: &str = "review_ready";
 /// to review the plan and run `openflows-harness gate approve --phase planning`.
 pub const ACTION_PLANNING_GATE: &str = "planning_gate";
 
+/// Action to signal that FORGE reached a completion state (handoff/PR/
+/// review_ready) without the current review cycle ever being approved by
+/// SENTINEL — i.e. the planning gate was bypassed. Routes to NEXUS so the
+/// anomaly is surfaced (and the unverified work is halted) instead of being
+/// silently treated as in-progress.
+pub const ACTION_GATE_BYPASS: &str = "gate_bypass";
+
 pub struct ForgePairNode {
     #[allow(dead_code)]
     workspace_root: PathBuf,
@@ -177,6 +184,37 @@ impl ForgePairNode {
         store.get_typed(&status_key).await
     }
 
+    /// Read the ticket's current review-cycle epoch (0 if never opened). Written
+    /// by the harness on every `status set planning`.
+    async fn read_plan_epoch(store: &SharedStore, ticket_id: &str) -> u64 {
+        let key = full_ticket_key_flat(ticket_id, "plan_epoch");
+        store.get_typed(&key).await.unwrap_or(0)
+    }
+
+    /// Read the epoch recorded in the durable approval marker (0 if the current
+    /// cycle was never approved). Written by the harness on `gate approve` and
+    /// not consumed when FORGE crosses the gate.
+    async fn read_plan_approved_epoch(store: &SharedStore, ticket_id: &str) -> u64 {
+        let key = full_ticket_key_flat(ticket_id, "planning_approved");
+        store
+            .get_typed::<serde_json::Value>(&key)
+            .await
+            .and_then(|v| v.get("epoch").and_then(|e| e.as_u64()))
+            .unwrap_or(0)
+    }
+
+    /// Whether the ticket's *current* review cycle was approved by SENTINEL.
+    /// The durable marker's epoch must match the ticket's current plan epoch;
+    /// a missing or stale marker means the cycle was never (properly) approved.
+    async fn current_cycle_approved(store: &SharedStore, ticket_id: &str) -> bool {
+        let current = Self::read_plan_epoch(store, ticket_id).await;
+        if current == 0 {
+            return false;
+        }
+        let approved = Self::read_plan_approved_epoch(store, ticket_id).await;
+        approved == current
+    }
+
     /// Read the harness-written PR info for a ticket.
     /// This is written when the agent calls `openflows-harness pr opened`.
     ///
@@ -285,6 +323,7 @@ impl BatchNode for ForgePairNode {
         let mut has_review_ready = false;
         let mut has_planning_gate = false;
         let mut has_failed = false;
+        let mut has_gate_bypass = false;
         let mut has_in_progress = false;
 
         let tickets: Vec<Ticket> = store.get_typed(KEY_TICKETS).await.unwrap_or_default();
@@ -331,8 +370,20 @@ impl BatchNode for ForgePairNode {
                                 .await;
                             has_pr_opened = true;
                         } else {
-                            // No PR info but review_ready — signal for Sentinel spawn
-                            has_review_ready = true;
+                            // No PR info but review_ready — signal for Sentinel spawn.
+                            // If the current cycle was never approved, this is also a
+                            // gate bypass (forge reached completion without a valid
+                            // planning approval).
+                            if !Self::current_cycle_approved(store, ticket_id).await {
+                                warn!(
+                                    ticket_id,
+                                    worker_id,
+                                    "review_ready reached without a valid planning-gate approval — gate bypass"
+                                );
+                                has_gate_bypass = true;
+                            } else {
+                                has_review_ready = true;
+                            }
                         }
                     }
                     "blocked" => {
@@ -473,10 +524,23 @@ impl BatchNode for ForgePairNode {
                 let has_handoff: Option<Value> = store.get_typed(&handoff_key).await;
 
                 if has_handoff.is_some() {
-                    info!(
-                        ticket_id,
-                        "Forge completed: handoff written, PR pending or review-ready"
-                    );
+                    // A handoff with no PR is a completion signal. Completing work
+                    // without the current review cycle having been approved by
+                    // SENTINEL is a planning-gate bypass — surface it rather than
+                    // silently treating the ticket as in-progress.
+                    if !Self::current_cycle_approved(store, ticket_id).await {
+                        warn!(
+                            ticket_id,
+                            worker_id,
+                            "Forge wrote a handoff without a valid planning-gate approval — gate bypass"
+                        );
+                        has_gate_bypass = true;
+                    } else {
+                        info!(
+                            ticket_id,
+                            "Forge completed: handoff written, PR pending or review-ready"
+                        );
+                    }
                 }
 
                 let ticket = tickets.iter().find(|t| t.id == ticket_id);
@@ -489,7 +553,11 @@ impl BatchNode for ForgePairNode {
                     }
                     _ => {
                         // Only mark as in_progress if we haven't already found a more specific state
-                        if !has_pr_opened && !has_review_ready && !has_planning_gate && !has_failed
+                        if !has_pr_opened
+                            && !has_review_ready
+                            && !has_planning_gate
+                            && !has_failed
+                            && !has_gate_bypass
                         {
                             has_in_progress = true;
                         }
@@ -503,13 +571,19 @@ impl BatchNode for ForgePairNode {
             has_pr_opened,
             has_review_ready,
             has_planning_gate,
+            has_gate_bypass,
             has_failed,
             has_in_progress,
             "ForgePairNode post_batch summary"
         );
 
-        // Priority: PR opened > planning gate > review ready > failed > in progress
-        if has_pr_opened {
+        // Priority: gate bypass > PR opened > planning gate > review ready > failed > in progress.
+        // A gate bypass is a completion reached without a valid planning approval — it must be
+        // surfaced to NEXUS (and the unverified work halted) above all other outcomes.
+        if has_gate_bypass {
+            info!("Forge: planning-gate bypass detected — routing to nexus for handling");
+            Ok(Action::new(ACTION_GATE_BYPASS))
+        } else if has_pr_opened {
             info!("Forge: PR(s) opened — routing to sentinel for review");
             Ok(Action::new(ACTION_PR_OPENED))
         } else if has_planning_gate {

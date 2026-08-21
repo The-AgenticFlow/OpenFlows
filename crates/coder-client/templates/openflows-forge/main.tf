@@ -5,6 +5,14 @@ terraform {
   }
 }
 
+# Per-user GitHub identity via Coder's built-in default external-auth provider
+# (Coder-managed GitHub app, device flow). Resolves as the workspace owner's
+# grant — no shared PAT. Supplies the GITHUB_TOKEN env used by `gh`. git
+# clone/push uses Coder's automatic GIT_ASKPASS instead of a stored token.
+data "coder_external_auth" "github" {
+  id = "github"
+}
+
 # TEMPORARY: Host path to the .dev-binaries directory on the Docker host.
 # Set via TF_VAR_dev_binary_host_path before running `coder templates push`.
 # (Remove when switching to GitHub releases for the openflows binaries.)
@@ -184,31 +192,10 @@ resource "coder_agent" "main" {
     print(f"wrote {settings_path} with {len(hooks)} hook events", file=sys.stderr)
     PYEOF
 
-    # Setup git credentials: get token from workspace owner via Coder API
-    # The agent token is injected by Coder as CODER_AGENT_TOKEN env var
-    CODER_URL="${data.coder_parameter.coder_url.value}"
-    OWNER_ID="${data.coder_workspace_owner.me.id}"
-    
-    # Fetch GitHub token via Coder API (uses the agent's own token)
-    if [ -n "$CODER_AGENT_TOKEN" ]; then
-      GITHUB_TOKEN=$(curl -s \
-        -H "Coder-Session-Token: $CODER_AGENT_TOKEN" \
-        "$CODER_URL/api/v2/users/$OWNER_ID/gitauths/github" 2>/dev/null \
-        | jq -r '.access_token // empty')
-    fi
-    
-    # Fallback to env var if API call fails
-    GITHUB_TOKEN="$${GITHUB_TOKEN:-$GITHUB_PERSONAL_ACCESS_TOKEN}"
-    
-    # Configure git with token for HTTPS push auth
-    if [ -n "$GITHUB_TOKEN" ]; then
-      git config --global credential.helper store
-      echo "https://git:$GITHUB_TOKEN@github.com" > /home/coder/.git-credentials
-      chmod 600 /home/coder/.git-credentials
-      log "Configured git credentials for GitHub push auth"
-    else
-      log "WARNING: No GitHub token available — git push may fail"
-    fi
+    # Setup git credentials: Coder automatically configures GIT_ASKPASS for the
+    # workspace owner, so `git clone`/`git pull`/`git push` authenticate as the
+    # owner with no stored token. No curl -> gitauths hack, no PAT fallback.
+    # `gh` uses the GITHUB_TOKEN env injected by data.coder_external_auth.github.
 
     # git pull or clone (creds via Coder external auth or configured above)
     if [ -d /home/coder/workspace/.git ]; then
@@ -319,6 +306,8 @@ resource "docker_container" "workspace" {
     "A2A_RELAY_ADDR=${var.a2a_relay_addr}",
     "CODER_WORKSPACE_ID=${data.coder_workspace.me.id}",
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
+    # Per-user GitHub identity (workspace owner's grant) for `gh` CLI
+    "GITHUB_TOKEN=${data.coder_external_auth.github.access_token}",
   ]
 
   # egress allowlist: Coder control plane + github.com + Redis only

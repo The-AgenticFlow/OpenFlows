@@ -4,7 +4,7 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${SPRINTLESS_GITHUB_TOKEN}"
+        "GITHUB_TOKEN": "${SPRINTLESS_GITHUB_TOKEN}"
       }
     },
     "filesystem": {

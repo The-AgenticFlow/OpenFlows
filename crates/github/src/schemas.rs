@@ -4,7 +4,7 @@
 // All tool calls are made through the GitHub REST/MCP interface.
 
 /// Returns the default command to spawn the GitHub MCP server via Docker.
-/// The GITHUB_PERSONAL_ACCESS_TOKEN env var must be set in the environment.
+/// The GITHUB_TOKEN env var (from Coder External Auth) is passed to the MCP server.
 pub fn github_mcp_cmd() -> Vec<&'static str> {
     vec![
         "docker",
@@ -12,7 +12,7 @@ pub fn github_mcp_cmd() -> Vec<&'static str> {
         "-i",
         "--rm",
         "-e",
-        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "GITHUB_TOKEN",
         "ghcr.io/github/github-mcp-server",
     ]
 }

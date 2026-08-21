@@ -105,7 +105,7 @@ impl VesselNode {
             Some(ref path) if path.exists() => {
                 info!(registry_path = %path.display(), "VESSEL loading config from registry");
                 VesselConfig::from_registry(path).unwrap_or_else(|e| {
-                    warn!(error = %e, "VESSEL failed to load from registry, falling back to GITHUB_PERSONAL_ACCESS_TOKEN");
+                    warn!(error = %e, "VESSEL failed to load from registry, falling back to GITHUB_TOKEN");
                     VesselConfig::from_env()
                 })
             }

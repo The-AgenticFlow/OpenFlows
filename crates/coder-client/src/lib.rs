@@ -370,6 +370,112 @@ impl CoderClient {
         }
     }
 
+    /// Create an additional user via the admin endpoint (POST /api/v2/users),
+    /// NOT the "first user" bootstrap endpoint (which only works for the first
+    /// admin). Requires the authenticated caller to be a Coder admin.
+    ///
+    /// Returns the created user. If the user already exists (409), the existing
+    /// user is looked up by username/email and returned, so the call is
+    /// idempotent.
+    pub async fn create_user(
+        &self,
+        email: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<CoderUser> {
+        let organization_id = match self.get_default_organization_id().await {
+            Ok(org_id) => org_id,
+            Err(_) => {
+                warn!("Could not resolve default organization id for user creation; omitting organization_ids");
+                String::new()
+            }
+        };
+        let mut body = serde_json::json!({
+            "email": email,
+            "username": username,
+            "password": password,
+            "login_type": "password",
+        });
+        if !organization_id.is_empty() {
+            body["organization_ids"] =
+                serde_json::json!([organization_id]);
+        }
+
+        let resp = self
+            .authenticated_request(reqwest::Method::POST, "/api/v2/users")
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send create user request")?;
+
+        if resp.status().is_success() {
+            let created: CoderUser = resp.json().await?;
+            info!(user_id = %created.id, username = %created.username, "Created tenant user");
+            Ok(created)
+        } else if resp.status().as_u16() == 403 {
+            // Coder RBAC: only the `owner` role can create users.
+            let body = resp.text().await.unwrap_or_default();
+            bail!(
+                "Cannot create user '{}': the bootstrap user lacks Coder `owner` role ({})\n\
+                 → Log in with an owner account (set CODER_SESSION_TOKEN to an owner's token, \
+                 or promote the current user to Owner in the Coder dashboard) and re-run.",
+                username,
+                body
+            )
+        } else if resp.status().as_u16() == 409 {
+            // User already exists — return the existing entry.
+            info!("Tenant user '{}' already exists; looking it up", username);
+            self.get_user_by_username_email(username, email).await
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("Failed to create user '{}' ({}): {}", username, status, body)
+        }
+    }
+
+    /// Look up a user by username or email across all pages of the users list.
+    /// Replaces the flaky single-page lookup that misses users on later pages.
+    pub async fn get_user_by_username_email(
+        &self,
+        username: &str,
+        email: &str,
+    ) -> Result<CoderUser> {
+        // Search is scoped to the default org in Coder; if the username/email
+        // isn't returned by the first page with a generous limit, paginate.
+        for offset in 0..10u32 {
+            let resp = self
+                .authenticated_request(reqwest::Method::GET, "/api/v2/users")
+                .query(&[
+                    ("limit", "100"),
+                    ("offset", &offset.to_string()),
+                    ("search", username),
+                ])
+                .send()
+                .await
+                .context("Failed to list users while locating tenant user")?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                bail!("Failed to list users ({}): {}", status, body)
+            }
+
+            let users_resp: UsersResponse = resp.json().await?;
+            let count = users_resp.users.len() as u32;
+            if let Some(user) = users_resp
+                .users
+                .into_iter()
+                .find(|u| u.username == username || u.email == email)
+            {
+                return Ok(user);
+            }
+            if count < 100 {
+                break;
+            }
+        }
+        bail!("User '{}' (email '{}') not found in Coder", username, email)
+    }
+
     /// Login with email/password and get a session token.
     pub async fn login_with_password(&self, email: &str, password: &str) -> Result<String> {
         let resp = self
@@ -450,6 +556,39 @@ impl CoderClient {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             bail!("Failed to list organizations ({}): {}", status, body)
+        }
+    }
+
+    /// Check whether the authenticated user has an external-auth grant for the
+    /// `github` provider.
+    ///
+    /// The `openflows-*` templates read `coder_external_auth("github")` and the
+    /// Coder provider blocks a build until the workspace owner links the grant,
+    /// so a missing grant hangs builds until Coder's reaper kills them. Callers
+    /// use this to fail fast with a clear message instead.
+    ///
+    /// GET /api/v2/external-auth/github
+    pub async fn github_external_auth_authenticated(&self) -> Result<bool> {
+        let resp = self
+            .authenticated_request(reqwest::Method::GET, "/api/v2/external-auth/github")
+            .send()
+            .await
+            .context("Failed to check GitHub external auth status")?;
+
+        if resp.status().is_success() {
+            let body: serde_json::Value = resp.json().await?;
+            Ok(body
+                .get("authenticated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false))
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            warn!(
+                "Could not verify GitHub external auth ({}) — assuming not authenticated: {}",
+                status, body
+            );
+            Ok(false)
         }
     }
 

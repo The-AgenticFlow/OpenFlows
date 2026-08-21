@@ -38,6 +38,8 @@ OpenFlows also enforces a **gated planning checkpoint** — FORGE writes a plan 
 
 One Coder server serves many teams. Each tenant = a real Coder user + a repo binding + an `openflows-nexus` workspace. Tenants are isolated by Coder RBAC and per-tenant Redis keyspace prefixes (`ns:{tenant}:...`).
 
+Tenants are **self-provisioned**: you sign in with your own identity (GitHub/OIDC) on the Coder dashboard and set your personal session token as `CODER_SESSION_TOKEN`. OpenFlows runs entirely as your user and provisions each tenant under your identity — no Coder `owner`/admin account is required.
+
 Configure multiple tenants via environment variables or the control plane API (documented in `docs/`).
 
 ## Project Status

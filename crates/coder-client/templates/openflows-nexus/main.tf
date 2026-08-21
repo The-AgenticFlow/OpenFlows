@@ -5,6 +5,14 @@ terraform {
   }
 }
 
+# Per-user GitHub identity via Coder's built-in default external-auth provider
+# (Coder-managed GitHub app, device flow). Resolves as the workspace owner's
+# grant — no shared PAT. Id "github" is the default provider id; verify via
+# dashboard -> External Auth if provisioning errors on missing auth.
+data "coder_external_auth" "github" {
+  id = "github"
+}
+
 # TEMPORARY: Host path to the .dev-binaries directory on the Docker host.
 # Set via TF_VAR_dev_binary_host_path before running `coder templates push`.
 # (Remove when switching to GitHub releases for the openflows binary.)
@@ -60,13 +68,6 @@ data "coder_parameter" "registry_json" {
 data "coder_parameter" "github_repository" {
   name        = "github_repository"
   description  = "GitHub repository (owner/repo) for the Controller to monitor"
-  default     = ""
-  type        = "string"
-}
-
-data "coder_parameter" "github_pat" {
-  name        = "github_pat"
-  description  = "GitHub Personal Access Token for issue/PR sync"
   default     = ""
   type        = "string"
 }
@@ -134,9 +135,6 @@ resource "coder_agent" "main" {
     export OPENFLOWS_TENANT="${data.coder_parameter.tenant.value}"
     export GITHUB_REPOSITORY="${data.coder_parameter.github_repository.value}"
     export OPENFLOWS_REGISTRY_JSON='${data.coder_parameter.registry_json.value}'
-    # GitHub PAT for issue sync - export as env var so controller picks it up automatically
-    export GITHUB_TOKEN="${data.coder_parameter.github_pat.value}"
-    echo "${data.coder_parameter.github_pat.value}" > /tmp/github_token 2>/dev/null || true
 
     cd /home/coder/workspace
 
@@ -198,7 +196,8 @@ resource "docker_container" "workspace" {
     "OPENFLOWS_TENANT=${data.coder_parameter.tenant.value}",
     "GITHUB_REPOSITORY=${data.coder_parameter.github_repository.value}",
     "OPENFLOWS_REGISTRY_JSON=${data.coder_parameter.registry_json.value}",
-    "GITHUB_TOKEN=${data.coder_parameter.github_pat.value}",
+    # Per-user GitHub identity (workspace owner's grant) for VesselNode/LoreNode/NexusNode REST
+    "GITHUB_TOKEN=${data.coder_external_auth.github.access_token}",
     "ROLE=nexus",
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
     # Bind the A2A relay on all interfaces so Forge/Sentinel workspaces can

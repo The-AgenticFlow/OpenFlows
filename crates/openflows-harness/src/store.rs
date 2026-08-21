@@ -35,6 +35,14 @@ const ENTRY_PHASES: &[&str] = &["planning", "blocked"];
 /// while it matches the ticket's current epoch.
 const PLAN_EPOCH_SUBKEY: &str = "plan_epoch";
 
+/// Subkey under which the last SENTINEL approval is durably recorded. Unlike
+/// the consumable gate key (deleted when FORGE crosses the gate), this marker
+/// survives consumption so the controller (NEXUS / forge_pair) can always tell
+/// whether the *current* review cycle was approved — it cannot be confused by a
+/// consumed gate. Overwritten on each approval; epoch comparison determines
+/// freshness.
+const PLAN_APPROVED_SUBKEY: &str = "planning_approved";
+
 /// Gate approval payload written by SENTINEL to allow FORGE to proceed.
 ///
 /// `plan_epoch` is the review cycle the approval was granted for; it must match
@@ -167,6 +175,11 @@ impl HarnessStore {
     /// Redis key under which the review-cycle epoch for `ticket` is stored.
     fn plan_epoch_key(&self, ticket: &str) -> String {
         self.key(&full_ticket_key_flat(ticket, PLAN_EPOCH_SUBKEY))
+    }
+
+    /// Redis key under which the durable "cycle was approved" marker is stored.
+    fn plan_approved_key(&self, ticket: &str) -> String {
+        self.key(&full_ticket_key_flat(ticket, PLAN_APPROVED_SUBKEY))
     }
 
     /// Redis key under which the gate approval for `ticket`+`phase` is stored.
@@ -462,6 +475,28 @@ impl HarnessStore {
             .client
             .set::<(), _, _>(&gate_key, json, None, None, false)
             .await;
+
+        // Durable "cycle was approved" marker. Unlike the consumable gate key
+        // (removed when FORGE crosses the gate), this survives so the controller
+        // (NEXUS / forge_pair) can always determine whether the *current* review
+        // cycle was approved. A failed write here must NOT be silent — it is the
+        // source of truth for the GATE_BYPASS path, so we propagate the error.
+        let approved_marker = serde_json::json!({
+            "epoch": current_epoch,
+            "phase": phase,
+            "approved_by": role,
+            "ts": approval.ts,
+        });
+        self.client
+            .set::<(), _, _>(
+                &self.plan_approved_key(ticket),
+                approved_marker.to_string(),
+                None,
+                None,
+                false,
+            )
+            .await
+            .context("failed to persist durable planning_approved marker for gate approval")?;
 
         println!(
             "Gate approved: {} phase '{}' by {} (plan_epoch={})",
