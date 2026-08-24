@@ -39,7 +39,18 @@ services:
       DOCKER_HOST: unix:///var/run/docker.sock
       REDIS_URL: ${REDIS_URL:-redis://localhost:6379}
       CODER_URL: ${CODER_URL:-http://localhost:${CODER_PORT:-7080}}
+      # GitHub identity for agents uses Coder GitHub external auth — no shared PAT.
+      # The default Coder-managed GitHub app is used for sign-in + read-scope git
+      # (clone/pull) unless CODER_OAUTH2_GITHUB_CLIENT_ID/SECRET are set in .env.
+      #
+      # For agents to PUSH branches and open/merge PRs (forge/vessel), configure
+      # your own GitHub OAuth app (with repo/write scope) and set the two values
+      # below in .env — they replace the default app and back the `github`
+      # external-auth grant with write scope. Leave unset to keep the default app.
       CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: ${CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS:-true}
+      CODER_OAUTH2_GITHUB_ALLOW_EVERYONE: ${CODER_OAUTH2_GITHUB_ALLOW_EVERYONE:-true}
+      CODER_OAUTH2_GITHUB_CLIENT_ID: ${CODER_OAUTH2_GITHUB_CLIENT_ID:-}
+      CODER_OAUTH2_GITHUB_CLIENT_SECRET: ${CODER_OAUTH2_GITHUB_CLIENT_SECRET:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # TEMPORARY: Mount local openflows binary for testing (remove when using GitHub releases)

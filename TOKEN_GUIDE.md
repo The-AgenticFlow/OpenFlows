@@ -68,6 +68,12 @@ OpenFlows requires **two tokens** to operate. Both are personal to you and grant
 - Monitor workspace status
 - Read/write workspace metadata
 
+> **Self-provisioning:** This token is the identity OpenFlows runs as. When you add a tenant,
+> the tenant is provisioned under your own user — OpenFlows does **not** create a separate
+> Coder user and does **not** require the deployment `owner` role. You only need your user to
+> hold the org permissions to push templates and create the `openflows-nexus` workspace (see
+> QUICK_START Step 4a).
+
 ---
 
 ## Quick Check

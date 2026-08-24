@@ -11,6 +11,11 @@ A **tenant** is:
 
 All agent actions (PRs, commits, merges) are attributed to the tenant owner's GitHub identity via Coder external auth.
 
+Tenants are **self-provisioned**: the operator signs in with their own identity
+(GitHub/OIDC) on the Coder dashboard and provides their session token as
+`CODER_SESSION_TOKEN`. The system runs entirely as that user — no Coder
+`owner`/admin account is required to add tenants.
+
 ## Isolation
 
 | Layer | Mechanism |
@@ -27,7 +32,7 @@ openflows tenant add owner/repo --name my-team
 ```
 
 This:
-1. Creates the tenant-owner Coder user (member role, no admin)
+1. Resolves the authenticated user (from `CODER_SESSION_TOKEN`) as the tenant owner
 2. Prints a GitHub OAuth link for the user to complete in the dashboard
 3. Waits for the OAuth grant
 4. Mints a scoped session token for that user

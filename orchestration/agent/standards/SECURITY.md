@@ -20,7 +20,7 @@ All agents must propose "dangerous" bash commands to NEXUS before execution. Dan
 - Prevent shell injection by using array-based process spawning instead of string interpolation where possible.
 
 ## 4. Generic Secret Protection (All Files)
-The `.claude/` directory is one known source of secrets (it contains provisioned `mcp.json` with `GITHUB_PERSONAL_ACCESS_TOKEN`), but the protection is fully generic — any file anywhere in the worktree that contains a secret is caught by the same safeguards:
+The `.claude/` directory is one known source of secrets (it contains provisioned `mcp.json` with `GITHUB_TOKEN`, injected by Coder External Auth), but the protection is fully generic — any file anywhere in the worktree that contains a secret is caught by the same safeguards:
 
 1. **Worktree .gitignore** — Known credential directories (`.claude/`, `.env.local`) are added to each worktree's `.gitignore` during provisioning. Additionally, any directory containing a redacted file is dynamically added to `.gitignore`.
 2. **Whole-worktree secret scanning** — `scan_and_scrub_secrets()` recursively scans **all** text files in the worktree for known secret patterns, not just `.claude/`. Any file containing secrets is redacted and its parent directory is added to `.gitignore`.
@@ -33,6 +33,7 @@ The `redact_patterns()` function in `agent-forge` matches and replaces known sec
 
 | Pattern | Redacted to |
 |---------|------------|
+| `GITHUB_TOKEN": "<value>"` | `GITHUB_TOKEN": "${GITHUB_TOKEN}"` |
 | `GITHUB_PERSONAL_ACCESS_TOKEN": "<value>"` | `GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"` |
 | `ghp_<36 chars>` | `REDACTED_GITHUB_TOKEN` |
 | `gho_<36 chars>` | `REDACTED_GITHUB_OAUTH` |
@@ -42,7 +43,7 @@ The `redact_patterns()` function in `agent-forge` matches and replaces known sec
 | `sk-<20 chars>T3<3 chars>` | `REDACTED_OPENAI_KEY` |
 | `AKIA<16 chars>` | `REDACTED_AWS_ACCESS_KEY` |
 
-Additionally, the runtime `GITHUB_TOKEN` / `GITHUB_PERSONAL_ACCESS_TOKEN` environment variable value is matched and replaced if found in any file.
+Additionally, the runtime `GITHUB_TOKEN` environment variable value is matched and replaced if found in any file.
 
 ## 6. Push Error Feedback Loop
 Work is only considered complete when the branch is successfully pushed and a PR is created. The system must not retry blindly:
@@ -63,7 +64,7 @@ The `scan_and_scrub_secrets()` function scans files with the following extension
 **Skipped directories:** `.git`, `node_modules`, `target`, `__pycache__`, `.next`, `dist`, `build`
 
 ## 8. Known Secret Sources
-The `.claude/mcp.json` is one known source (it embeds `GITHUB_PERSONAL_ACCESS_TOKEN` for the GitHub MCP server). But the protection is generic — if secrets appear in any other file (e.g., a `.env` accidentally committed, a source file with a hardcoded API key, a Terraform `.tfvars` with credentials), the same scanning, redaction, untracking, and history rewrite applies.
+The `.claude/mcp.json` is one known source (it embeds `GITHUB_TOKEN` for the GitHub MCP server). But the protection is generic — if secrets appear in any other file (e.g., a `.env` accidentally committed, a source file with a hardcoded API key, a Terraform `.tfvars` with credentials), the same scanning, redaction, untracking, and history rewrite applies.
 
 The `McpConfigGenerator` writes the GitHub token directly into `mcp.json` because the GitHub MCP server requires it in the `env` block at startup. This is safe because:
 - The `.claude/` directory is gitignored in every worktree (specific known case)

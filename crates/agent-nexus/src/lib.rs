@@ -1673,6 +1673,17 @@ Use `openflows-harness` for all coordination:
                 );
             }
 
+            // Gate-bypass enforcement: an active FORGE ticket that reached a
+            // completion artifact (handoff / review_ready) without the current
+            // review cycle ever being approved by SENTINEL must be halted and
+            // surfaced, not silently treated as in-progress. This closes the
+            // reactivity hole where a forge that skips `status set planning`
+            // would otherwise run unopposed (SENTINEL never spawned).
+            if Self::is_gate_bypass(store, &ticket.id, phase).await {
+                Self::flag_gate_bypass(store, &ticket.id, &ticket.status).await;
+                continue;
+            }
+
             match phase {
                 Some("planning") => {
                     info!(
@@ -2708,13 +2719,12 @@ Use `openflows-harness` for all coordination:
         #[allow(clippy::needless_borrow)]
         let worker_entry = registry.get(&base_id);
 
-        // Resolve the worker's GitHub token. resolve_github_token() falls back
-        // to GITHUB_PERSONAL_ACCESS_TOKEN when no dedicated github_token_env is
-        // configured on the registry entry, so agents without a per-agent token
-        // still work as long as the fallback env var is set. We do NOT hard-fail
-        // on a missing github_token_env field — that would block all v2-style
-        // registry entries (which omit the deprecated v1 field) even when the
-        // shared PAT is perfectly valid for assignment.
+        // Resolve the worker's GitHub token. resolve_github_token() resolves the
+        // canonical GITHUB_TOKEN (Coder External Auth) when no dedicated
+        // github_token_env override is configured on the registry entry. We do
+        // NOT hard-fail on a missing github_token_env field — that would block
+        // all v2-style registry entries (which omit the deprecated v1 field)
+        // even when the canonical GITHUB_TOKEN is perfectly valid for assignment.
         let worker_token_result = identity_manager.resolve_github_token(worker_id);
         if let Err(e) = &worker_token_result {
             warn!(
@@ -2725,7 +2735,7 @@ Use `openflows-harness` for all coordination:
             let env_var_name = worker_entry
                 .as_ref()
                 .and_then(|e| e.github_token_env.as_deref())
-                .unwrap_or("GITHUB_PERSONAL_ACCESS_TOKEN");
+                .unwrap_or("GITHUB_TOKEN");
             let comment = format!(
                 "<!-- openflows-assignment-failure -->\n\
                  ⚠️ **Could not assign this issue to `{}`** — the agent's GitHub token could not \
@@ -3123,6 +3133,85 @@ Use `openflows-harness` for all coordination:
     async fn is_waiting_for_planning_gate(store: &SharedStore, ticket_id: &str) -> bool {
         Self::ticket_phase(store, ticket_id).await.as_deref() == Some("planning")
             && !Self::gate_approved(store, ticket_id, "planning").await
+    }
+
+    /// Read the ticket's current review-cycle epoch (0 if never opened). Written
+    /// by the harness on every `status set planning`.
+    async fn plan_epoch(store: &SharedStore, ticket_id: &str) -> u64 {
+        let key = full_ticket_key_flat(ticket_id, "plan_epoch");
+        match store.get_typed::<serde_json::Value>(&key).await {
+            Some(serde_json::Value::Number(n)) => n.as_u64().unwrap_or(0),
+            Some(serde_json::Value::String(s)) => s.parse::<u64>().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    /// Read the epoch recorded in the durable approval marker (0 if the current
+    /// cycle was never approved). Written by the harness on `gate approve` and
+    /// not consumed when FORGE crosses the gate.
+    async fn plan_approved_epoch(store: &SharedStore, ticket_id: &str) -> u64 {
+        let key = full_ticket_key_flat(ticket_id, "planning_approved");
+        store
+            .get_typed::<serde_json::Value>(&key)
+            .await
+            .and_then(|v| v.get("epoch").and_then(|e| e.as_u64()))
+            .unwrap_or(0)
+    }
+
+    /// True iff the ticket's current review cycle was approved by SENTINEL
+    /// (the durable marker's epoch must equal the current plan epoch).
+    async fn current_cycle_approved(store: &SharedStore, ticket_id: &str) -> bool {
+        let current = Self::plan_epoch(store, ticket_id).await;
+        if current == 0 {
+            return false;
+        }
+        Self::plan_approved_epoch(store, ticket_id).await == current
+    }
+
+    /// True iff an active FORGE ticket has reached a completion artifact
+    /// (handoff written, review_ready phase, or PR recorded) without the
+    /// current review cycle having been approved — i.e. the planning gate was
+    /// bypassed.
+    async fn is_gate_bypass(store: &SharedStore, ticket_id: &str, phase: Option<&str>) -> bool {
+        if Self::current_cycle_approved(store, ticket_id).await {
+            return false;
+        }
+        if phase == Some("review_ready") {
+            return true;
+        }
+        let handoff_key = full_ticket_key_flat(ticket_id, "handoff");
+        store.get(&handoff_key).await.is_some()
+    }
+
+    /// Fail-stop a gate-bypassed ticket: move it to AwaitingHuman with a clear
+    /// reason so the unverified work is halted and surfaced (not silently
+    /// treated as in-progress).
+    async fn flag_gate_bypass(store: &SharedStore, ticket_id: &str, status: &TicketStatus) {
+        let worker_id = match status {
+            TicketStatus::Assigned { worker_id } | TicketStatus::InProgress { worker_id } => {
+                worker_id.clone()
+            }
+            _ => "unknown".to_string(),
+        };
+        let mut tickets: Vec<Ticket> = store.get_typed(KEY_TICKETS).await.unwrap_or_default();
+        let mut updated = false;
+        if let Some(ticket) = tickets.iter_mut().find(|t| t.id == ticket_id) {
+            ticket.status = TicketStatus::AwaitingHuman {
+                worker_id,
+                reason: "planning-gate bypass: FORGE reached completion without SENTINEL approving the plan in the current review cycle"
+                    .to_string(),
+                attempts: ticket.attempts,
+            };
+            updated = true;
+        }
+        if updated {
+            store.set(KEY_TICKETS, json!(tickets)).await;
+        }
+        warn!(
+            ticket_id,
+            reason = "planning-gate bypass (no valid SENTINEL approval for current cycle)",
+            "Gate bypass flagged — ticket moved to AwaitingHuman for SENTINEL / human review"
+        );
     }
 
     async fn workspace_link_for_worker(
@@ -4506,5 +4595,103 @@ mod tests {
         assert_eq!(resolved, 1);
         assert!(matches!(tickets[0].status, TicketStatus::Open));
         assert!(matches!(tickets[1].status, TicketStatus::Failed { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_current_cycle_approved_requires_matching_epoch() {
+        let store = SharedStore::new_in_memory();
+        let ticket_id = "T-BYPASS";
+
+        // No cycle opened -> not approved.
+        assert!(!NexusNode::current_cycle_approved(&store, ticket_id).await);
+
+        // Cycle 1 opened but never approved.
+        store
+            .set(&full_ticket_key_flat(ticket_id, "plan_epoch"), json!("1"))
+            .await;
+        assert!(!NexusNode::current_cycle_approved(&store, ticket_id).await);
+
+        // Approved in cycle 1 -> approved.
+        store
+            .set(
+                &full_ticket_key_flat(ticket_id, "planning_approved"),
+                json!({ "epoch": 1, "approved_by": "sentinel" }),
+            )
+            .await;
+        assert!(NexusNode::current_cycle_approved(&store, ticket_id).await);
+
+        // Cycle advances to 2 without re-approval -> stale, not approved.
+        store
+            .set(&full_ticket_key_flat(ticket_id, "plan_epoch"), json!("2"))
+            .await;
+        assert!(!NexusNode::current_cycle_approved(&store, ticket_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_is_gate_bypass_detects_unapproved_completion() {
+        let store = SharedStore::new_in_memory();
+        let ticket_id = "T-BYPASS-2";
+
+        // No handoff, no review_ready -> not a bypass (still working).
+        assert!(!NexusNode::is_gate_bypass(&store, ticket_id, Some("building")).await);
+
+        // Handoff written but cycle never opened/approved -> bypass.
+        store
+            .set(
+                &full_ticket_key_flat(ticket_id, "handoff"),
+                json!({ "done": true }),
+            )
+            .await;
+        assert!(NexusNode::is_gate_bypass(&store, ticket_id, Some("review_ready")).await);
+        assert!(NexusNode::is_gate_bypass(&store, ticket_id, None).await);
+
+        // Now open and approve the cycle -> same handoff is no longer a bypass.
+        store
+            .set(&full_ticket_key_flat(ticket_id, "plan_epoch"), json!("1"))
+            .await;
+        store
+            .set(
+                &full_ticket_key_flat(ticket_id, "planning_approved"),
+                json!({ "epoch": 1, "approved_by": "sentinel" }),
+            )
+            .await;
+        assert!(!NexusNode::is_gate_bypass(&store, ticket_id, Some("review_ready")).await);
+    }
+
+    #[tokio::test]
+    async fn test_flag_gate_bypass_moves_ticket_to_awaiting_human() {
+        let store = SharedStore::new_in_memory();
+        let ticket_id = "T-BYPASS-3";
+        store
+            .set(
+                KEY_TICKETS,
+                json!([{
+                    "id": ticket_id,
+                    "title": "Bypass",
+                    "body": "",
+                    "priority": 0,
+                    "status": { "type": "in_progress", "worker_id": "forge-1" },
+                    "attempts": 0
+                }]),
+            )
+            .await;
+
+        NexusNode::flag_gate_bypass(
+            &store,
+            ticket_id,
+            &TicketStatus::Assigned {
+                worker_id: "forge-1".to_string(),
+            },
+        )
+        .await;
+
+        let tickets: Vec<Ticket> = store.get_typed(KEY_TICKETS).await.unwrap_or_default();
+        let t = tickets.iter().find(|t| t.id == ticket_id).unwrap();
+        match &t.status {
+            TicketStatus::AwaitingHuman { reason, .. } => {
+                assert!(reason.contains("planning-gate bypass"));
+            }
+            other => panic!("expected AwaitingHuman, got {:?}", other),
+        }
     }
 }

@@ -36,7 +36,7 @@ Open `.env` and fill in the required variables. The file is well-commented; the 
 |----------|----------|-------------|
 | `GITHUB_TOKEN` | **Yes** | GitHub PAT with the `repo` scope — used to sync issues and create PRs. Get it at <https://github.com/settings/tokens> (classic token, `repo` scope). |
 | `GITHUB_REPOSITORY` | **Yes** | Your repo as `owner/repo` (e.g. `my-org/my-repo`). The controller watches this repo for new issues. |
-| `CODER_SESSION_TOKEN` | **Yes** | API token for authenticating with Coder. Leave empty in Step 1 — you will paste it in [Step 4](#step-4--sign-in-add-a-coder-license--get-the-api-token). |
+| `CODER_SESSION_TOKEN` | **Yes** | Your personal API token from Coder (the identity OpenFlows runs as — see [Step 4](#step-4--sign-in-add-a-coder-license--get-the-api-token)). Leave empty in Step 1 — you will paste it in Step 4. |
 
 The following variables are optional — the system uses defaults that work out of the box with `docker compose up -d`. Only set them if you host Redis or Coder elsewhere, or want to customize the admin account:
 
@@ -126,9 +126,11 @@ Then:
    CODER_SESSION_TOKEN=your_token_here
    ```
 
-### Step 4a — Grant a non-admin (OAuth) user the permissions OpenFlows needs
+### Step 4a — Grant your (non-admin) user the permissions OpenFlows needs
 
-When a team member signs in with GitHub OAuth, Coder creates them as a **regular member**. A regular member can *access* templates but **cannot create workspaces or push templates**. If you want OpenFlows to run as that user (instead of the hardcoded `admin`), you must grant them the right roles — otherwise bootstrap fails with `403 Unauthorized to create workspace`.
+OpenFlows is **self-provisioned**: the user who owns `CODER_SESSION_TOKEN` is the identity OpenFlows runs as. When you sign in with GitHub OAuth, Coder creates you as a **regular member**. A regular member can *access* templates but **cannot create workspaces or push templates** — the two things bootstrap does (push the `openflows-*` templates and create the `openflows-nexus` control-plane workspace under your own user).
+
+> **No `owner` role needed.** You do not need Coder's deployment `owner` role, and OpenFlows no longer creates a separate per-tenant Coder user. You only grant *your own user* the org-level permissions to manage templates and create your own workspace.
 
 **Roles OpenFlows needs:**
 
@@ -167,7 +169,7 @@ coder organizations members list -O=<org>
 3. Find the user, click **Edit roles**, and select `organization-admin` and `organization-template-admin`. Keep `organization-workspace-access` selected as well.
 4. Confirm `organization-workspace-creation-ban` is **not** selected.
 
-Then set that user's token in `.env` as `CODER_SESSION_TOKEN` and re-run `./scripts/prod.sh bootstrap` — OpenFlows will run as that user instead of `admin`.
+Then set that user's token in `.env` as `CODER_SESSION_TOKEN` and re-run `./scripts/prod.sh bootstrap` — OpenFlows will run as that user's own identity. The same token is used when you add a tenant (Step 5), so a tenant is provisioned under your user without Coder's `owner` role.
 
 ---
 
@@ -179,7 +181,7 @@ Run this from the **project root** to bind a GitHub repository to the controller
 ./scripts/prod.sh tenant <owner/repo> --name <my-team>
 ```
 
-**What this does:** Register a team as a tenant so the controller can sync issues from the given repo, provision workspaces, and coordinate agents for that team. You must add at least one tenant before starting the controller. See [TOKEN_GUIDE.md](TOKEN_GUIDE.md) for the token acquisition walkthrough.
+**What this does:** Registers a team as a tenant so the controller can sync issues from the given repo, provision workspaces, and coordinate agents for that team. The tenant is provisioned under your own authenticated user (from `CODER_SESSION_TOKEN`) — OpenFlows does **not** create a separate Coder user for the tenant, so no `owner`/admin role is needed. You must add at least one tenant before starting the controller. See [TOKEN_GUIDE.md](TOKEN_GUIDE.md) for the token acquisition walkthrough.
 
 ---
 

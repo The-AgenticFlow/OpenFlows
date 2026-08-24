@@ -7,6 +7,7 @@
       "plan_mode": false,
       "max_instances": 2,
       "cli": "claude",
+      "github_token_env": "GITHUB_TOKEN",
       "skills": ["forge-coding", "forge-planning", "shared-harness-protocol"],
       "mcp": {}
     },
@@ -16,6 +17,7 @@
       "model": "claude-sonnet-4-5",
       "plan_mode": true,
       "max_instances": 1,
+      "github_token_env": "GITHUB_TOKEN",
       "skills": ["sentinel-review", "sentinel-criteria", "shared-harness-protocol"],
       "mcp": {}
     },
@@ -25,6 +27,7 @@
       "model": "claude-haiku-4-5",
       "plan_mode": false,
       "max_instances": 1,
+      "github_token_env": "GITHUB_TOKEN",
       "skills": ["vessel-merge-protocol", "vessel-ci-gate", "shared-harness-protocol"],
       "mcp": {}
     },
@@ -34,6 +37,7 @@
       "model": "claude-haiku-4-5",
       "plan_mode": false,
       "max_instances": 1,
+      "github_token_env": "GITHUB_TOKEN",
       "skills": ["lore-documentation", "lore-changelog", "shared-harness-protocol"],
       "mcp": {}
     }
