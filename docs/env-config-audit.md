@@ -1,0 +1,92 @@
+# Environment Configuration Audit
+
+Issue #185 — centralize environment configuration with `envconfig`.
+
+This document inventories every environment variable read by the Rust
+workspace, classifies it, and records the recommended action. It accompanies
+the new centralized `crates/config/src/env.rs` layer.
+
+## Classification key
+
+| Tag | Meaning |
+|---|---|
+| `in-use` | Read by Rust code and needed at runtime. |
+| `required` | `in-use` and mandatory (startup fails if missing) — no default. |
+| `duplicated` | Same value defaulted/read inline in more than one crate; the inline default should move to the config layer. |
+| `legacy-alias` | Two env vars mean the same thing; one should be canonical, the other kept as a deprecated alias. |
+| `stale` / `unused-in-rust` | Only referenced by `.env.example`/docker-compose, never read by Rust. |
+| `internal` | Set by the code itself (`std::env::set_var`) and consumed internally; not user configuration. |
+
+## Inventory
+
+| Variable | Files (Rust) | Classification | Action |
+|---|---|---|---|
+| `CODER_URL` | coder-client, agent-sentinel, agent-nexus, agent-forge, binary | in-use · duplicated | Centralize default (`http://localhost:7080`) in `CoderConfig.url` |
+| `CODER_SESSION_TOKEN` | coder-client, sentinel, nexus, forge, vessel, binary | required | `CoderConfig.session_token`; required in controller |
+| `CODER_API_TOKEN` | sentinel, nexus, forge, vessel, binary/doctor | legacy-alias | **Excluded from centralized layer** (duplicate of `CODER_SESSION_TOKEN`); callers keep their inline fallback |
+| `CODER_ADMIN_USERNAME` | coder-client/bootstrap | stale | **Removed** — Coder signs in by email, not username |
+| `CODER_ADMIN_EMAIL` | coder-client/bootstrap | in-use | `CoderConfig.admin_email` (default `admin@openflows.dev`) |
+| `CODER_ADMIN_PASSWORD` | coder-client/bootstrap | in-use | `CoderConfig.admin_password` (default `Op3nFl0ws!`) |
+| `CODER_GITHUB_TOKEN` | agent-vessel/types | in-use | `CoderConfig.github_token` |
+| `CODER_IMAGE_TAG` | binary/doctor | in-use | `CoderConfig.image_tag` (default `latest`) |
+| `CODER_TRANSPORT_VERBOSE` | provisioner/transport | confusing | **Excluded from centralized layer** |
+| `CODER_WORKSPACE_ID` | openflows-harness/store | confusing | **Excluded from centralized layer** (read inline with default only) |
+| `CODER_EXTERNAL_AUTH_0_ID` | binary/doctor | in-use | `CoderConfig.external_auth_id` |
+| `CODER_EXTERNAL_AUTH_0_SECRET` | binary/doctor | in-use | `CoderConfig.external_auth_secret` |
+| `REDIS_URL` | binary, debug, doctor | in-use · duplicated | `InfraConfig.redis_url` (default `redis://localhost:6379`) |
+| `A2A_RELAY_ADDR` | agent-nexus/a2a, harness/a2a_client | in-use · duplicated | `InfraConfig.a2a_relay_addr` (default `127.0.0.1:3000`) |
+| `OPENFLOWS_TENANT` | coder-client, pocketflow-core, nexus, harness, binary | required · duplicated | `TenantConfig.tenant` (default `default`; required in controller) |
+| `OPENFLOWS_TICKET` | openflows-harness | required | `TenantConfig.ticket` |
+| `OPENFLOWS_ROLE` | openflows-harness | required | `TenantConfig.role` |
+| `OPENFLOWS_HOME` | agent-vessel, binary/orchestration | in-use | `TenantConfig.home` (default `~/.openflows`) |
+| `OPENFLOWS_REGISTRY_PATH` | coder-client, nexus, binary | in-use · internal | `TenantConfig.registry_path` |
+| `OPENFLOWS_REGISTRY_JSON` | coder-client, nexus, binary | in-use · internal | `TenantConfig.registry_json` |
+| `OPENFLOWS_NEXUS_WORKSPACE_ID` | coder-client | in-use · internal | `TenantConfig.nexus_workspace_id` |
+| `OPENFLOWS_NEXUS_WORKSPACE_NAME` | coder-client | in-use · internal | `TenantConfig.nexus_workspace_name` |
+| `OPENFLOWS_NEXUS_API_TOKEN` | coder-client | in-use · legacy-alias | `TenantConfig.nexus_api_token`; reconcile with `NEXUS_CODER_API_TOKEN` |
+| `NEXUS_CODER_API_TOKEN` | coder-client | legacy-alias | Merge into `OPENFLOWS_NEXUS_API_TOKEN` |
+| `OPENFLOWS_TAR` | coder-client/build.rs | in-use | `TenantConfig.tar` (default `tar`) |
+| `ARTIFACTS_DIR` | agent-nexus, binary | in-use · internal | `TenantConfig`/`AgentConfig` |
+| `AGENTFLOW_WORKSPACE_ROOT` | agent-lore, agent-vessel | in-use · legacy-alias | `AgentConfig.workspace_root` (canonical) |
+| `WORKSPACE_ROOT` | agent-nexus, agent-vessel | legacy-alias | `AgentConfig.legacy_workspace_root` (deprecated) |
+| `HOME` / `USERPROFILE` | coder-client, nexus, vessel, binary | in-use (platform) | Use `dirs` semantics / `TenantConfig.openflows_home()` |
+| `GITHUB_TOKEN` | agent-nexus | in-use | `GithubConfig.token` |
+| `GITHUB_REPOSITORY` | coder-client, nexus, binary | required | `GithubConfig.repository` |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | coder-client, agent-lore, vessel, config | required | `GithubConfig.personal_access_token`; `effective_token()` |
+| `USE_AI_GATEWAY` | config/registry | in-use | `AgentConfig.use_ai_gateway` |
+| `DEFAULT_CLI` | config/registry | in-use | keep (registry-specific) |
+| `SLACK_WEBHOOK_URL` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
+| `DISCORD_WEBHOOK_URL` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
+| `WHATSAPP_ACCOUNT_SID` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
+| `WHATSAPP_API_KEY` | notifier | legacy-alias | **Excluded from centralized layer** (notifier config removed) |
+| `WHATSAPP_AUTH_TOKEN` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
+| `WHATSAPP_FROM_PHONE` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
+| `WHATSAPP_TO_PHONE` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
+| `WHATSAPP_PHONE_NUMBER` | notifier | legacy-alias | **Excluded from centralized layer** (notifier config removed) |
+| `TF_VAR_dev_binary_host_path` | coder-client | internal | keep (set by code for terraform) |
+| `CODER_PG_PASSWORD` | — (docker-compose only) | stale / unused-in-rust | remove from Rust docs; keep in compose |
+| `CODER_PORT`, `CODER_INTERNAL_PORT` | — (docker-compose only) | stale / unused-in-rust | remove from Rust docs |
+| `CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS` | — (docker-compose only) | stale / unused-in-rust | remove from Rust docs |
+| `CODER_ACCESS_URL` | — (compose/scripts only) | stale / unused-in-rust | — |
+
+## Removed / excluded from the centralized layer
+
+The following config was intentionally left out of `config::env` in issue #185:
+
+- **Notifier config** — `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`, and all
+  `WHATSAPP_*` vars: notifier config and its struct were removed entirely.
+- **`CODER_API_TOKEN`** — duplicate of `CODER_SESSION_TOKEN`; excluded (existing
+  callers keep their inline fallback).
+- **`CODER_ADMIN_USERNAME`** — removed; Coder signs in by email, not username.
+- **`CODER_TRANSPORT_VERBOSE`** — excluded (inline read in provisioner only).
+- **`CODER_WORKSPACE_ID`** — excluded (inline read with default only).
+
+## Recommended cleanups (non-blocking, follow-up)
+
+1. Promote `AGENTFLOW_WORKSPACE_ROOT` as canonical; drop `WORKSPACE_ROOT` over
+   time (kept only as a deprecated alias for now).
+2. Reconcile `OPENFLOWS_NEXUS_API_TOKEN` vs `NEXUS_CODER_API_TOKEN`.
+3. Remove docker-compose-only vars from Rust-facing documentation.
+4. Migrate remaining inline `std::env::var` reads in the agent crates onto the
+   centralized accessors (`CoderConfig`, `InfraConfig`, `TenantConfig`,
+   `GithubConfig`, `AgentConfig`).

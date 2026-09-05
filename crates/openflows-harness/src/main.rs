@@ -221,13 +221,6 @@ enum VerifyAction {
     },
 }
 
-fn require_env(name: &str) -> Result<String> {
-    std::env::var(name).context(format!(
-        "{} is not set. This must be injected by the workspace template.",
-        name
-    ))
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -238,10 +231,18 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let redis_url = require_env("REDIS_URL")?;
-    let tenant = require_env("OPENFLOWS_TENANT")?;
-    let ticket = require_env("OPENFLOWS_TICKET")?;
-    let role = require_env("OPENFLOWS_ROLE")?;
+
+    let env = config::EnvConfig::from_env().context("failed to load environment configuration")?;
+    let redis_url = env.infra.redis_url.clone();
+    let tenant = env.tenant.tenant.clone();
+    let ticket =
+        env.tenant.ticket.clone().context(
+            "OPENFLOWS_TICKET is not set. This must be injected by the workspace template.",
+        )?;
+    let role =
+        env.tenant.role.clone().context(
+            "OPENFLOWS_ROLE is not set. This must be injected by the workspace template.",
+        )?;
 
     let store = store::HarnessStore::new(&redis_url, &tenant).await?;
 
