@@ -451,7 +451,7 @@ impl CoderBootstrapper {
             }
         };
         let coder_url_for_workspace = client.base_url().replace("localhost", "coder");
-        let github_pat = std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN").unwrap_or_default();
+        let github_pat = std::env::var("GITHUB_TOKEN").unwrap_or_default();
 
         let workspace = client
             .create_workspace(&CreateWorkspaceRequest {
@@ -545,16 +545,16 @@ impl CoderBootstrapper {
             }
             Err(e) => {
                 warn!(error = %e, "Could not verify LLM configuration (Chats API may not be enabled yet)");
-                info!("  ⚠ Could not verify LLM config — ensure at least one model is configured in the Coder dashboard");
+                info!("  ⚠ Could not verify LLM config — ensure Coder Agents/AI is enabled and at least one model is configured (dashboard → AI Settings → Coder Agents → Models)");
                 Ok(())
             }
         }
     }
 
     /// Verify that GitHub external auth is configured on the Coder server.
-    /// This is now a no-op since GitHub OAuth is configured directly in the Coder dashboard.
+    ///  needed for agents authentication
     pub fn verify_external_auth_configured() -> Result<()> {
-        info!("  ✓ GitHub external auth should be configured in the Coder dashboard");
+        info!("  ✓ GitHub external auth configure in the Coder dashboard if agents authentication");
         Ok(())
     }
 
@@ -713,7 +713,7 @@ impl CoderBootstrapper {
         let nexus_workspace_name = format!("openflows-nexus-{}", tenant_name);
         let repo_url = format!("https://github.com/{}.git", github_repo);
 
-        let github_pat = std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN").unwrap_or_default();
+        let github_pat = std::env::var("GITHUB_TOKEN").unwrap_or_default();
         let workspace = client
             .create_workspace_for_user(
                 &tenant_user.id,

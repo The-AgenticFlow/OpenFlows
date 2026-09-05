@@ -448,7 +448,7 @@ impl Registry {
     /// Resolve the workspace provider for a given slot ID.
     ///
     /// Resolve GitHub token for a given agent./// If the agent has `github_token_env` set, reads from that env var.
-    /// Falls back to `GITHUB_PERSONAL_ACCESS_TOKEN` for backward compatibility.
+    /// Falls back to `GITHUB_TOKEN` when no per-agent token is configured.
     /// Handles instance IDs (e.g., "forge-1") by stripping suffix to find base agent.
     /// Returns an error if the agent exists but is inactive (not in active_agents).
     pub fn resolve_github_token(&self, agent_id: &str) -> Result<String> {
@@ -468,8 +468,9 @@ impl Registry {
             Some(entry) => match &entry.github_token_env {
                 Some(env_var) => std::env::var(env_var)
                     .with_context(|| format!("{} not set for agent {}", env_var, agent_id))?,
-                None => std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN")
-                    .context("GITHUB_PERSONAL_ACCESS_TOKEN not set (fallback for agent without github_token_env)")?,
+                None => std::env::var("GITHUB_TOKEN").context(
+                    "GITHUB_TOKEN not set (fallback for agent without github_token_env)",
+                )?,
             },
             None => {
                 if entry_exists {
@@ -477,14 +478,18 @@ impl Registry {
                     // Silently returning the global PAT would mask misconfiguration.
                     // Use the stripped id so the message matches the registry key
                     // (e.g. "lore" rather than the instance id "lore-1").
-                    let display_id = if base_id == agent_id { stripped } else { base_id };
+                    let display_id = if base_id == agent_id {
+                        stripped
+                    } else {
+                        base_id
+                    };
                     anyhow::bail!(
                         "Agent '{}' exists but is inactive — set active: true in registry.json or remove agent from flow",
                         display_id
                     );
                 } else {
                     // Agent not found at all — fall back to global PAT for backward compat
-                    std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN")
+                    std::env::var("GITHUB_TOKEN")
                         .context(format!("Agent '{}' not found in registry", base_id))?
                 }
             }

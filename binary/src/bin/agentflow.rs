@@ -366,7 +366,7 @@ async fn run_bootstrap() -> Result<()> {
         eprintln!("\n  ⚠ {}", e);
     }
 
-    println!("\nBootstrap complete. Run `openflows tenant add <owner/repo>` to add a tenant.");
+    println!("\nBootstrap complete.");
     Ok(())
 }
 

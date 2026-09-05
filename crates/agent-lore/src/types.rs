@@ -49,7 +49,7 @@ impl LoreConfig {
     }
 
     /// Create config using per-agent token from registry (if configured).
-    /// Falls back to GITHUB_PERSONAL_ACCESS_TOKEN for backward compatibility.
+    /// Falls back to GITHUB_TOKEN.
     pub fn from_registry(registry_path: impl AsRef<Path>) -> Result<Self> {
         let registry = Registry::load(registry_path)?;
         let github_token = registry.resolve_github_token("lore")?;
@@ -102,15 +102,13 @@ impl LoreConfig {
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, registry = %path.display(), "LORE failed to resolve token from registry, falling back");
-                        std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN").unwrap_or_default()
+                        std::env::var("GITHUB_TOKEN").unwrap_or_default()
                     }
                 }
             }
             _ => {
-                tracing::warn!(
-                    "LORE: registry.json not found, falling back to GITHUB_PERSONAL_ACCESS_TOKEN"
-                );
-                std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN").unwrap_or_default()
+                tracing::warn!("LORE: registry.json not found, falling back to GITHUB_TOKEN");
+                std::env::var("GITHUB_TOKEN").unwrap_or_default()
             }
         };
 
