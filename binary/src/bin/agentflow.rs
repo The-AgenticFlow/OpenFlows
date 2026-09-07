@@ -149,8 +149,8 @@ async fn run_controller() -> Result<()> {
     cfg.validate_controller()?;
     let coder_url = cfg.coder.url.clone();
     let _coder_token = cfg.coder.effective_token();
-    let redis_url = cfg.infra.redis_url.clone();
-    let tenant = cfg.tenant.tenant.clone();
+    let redis_url = cfg.infra.effective_redis_url();
+    let tenant = cfg.tenant.effective_tenant().to_string();
     let github_repo = cfg
         .github
         .repository

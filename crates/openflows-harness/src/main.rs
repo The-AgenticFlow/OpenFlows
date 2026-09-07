@@ -233,8 +233,15 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let env = config::EnvConfig::from_env().context("failed to load environment configuration")?;
-    let redis_url = env.infra.redis_url.clone();
-    let tenant = env.tenant.tenant.clone();
+    let redis_url = env
+        .infra
+        .redis_url
+        .clone()
+        .context("REDIS_URL is not set. This must be injected by the workspace template.")?;
+    let tenant =
+        env.tenant.tenant.clone().context(
+            "OPENFLOWS_TENANT is not set. This must be injected by the workspace template.",
+        )?;
     let ticket =
         env.tenant.ticket.clone().context(
             "OPENFLOWS_TICKET is not set. This must be injected by the workspace template.",
