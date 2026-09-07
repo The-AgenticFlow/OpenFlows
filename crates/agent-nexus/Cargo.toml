@@ -27,3 +27,9 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio-stream = { workspace = true, features = ["sync"] }
 futures = { workspace = true }
+
+# Coder agent lifecycle hooks (experimental) consumer
+jsonwebtoken = "9"
+sha2 = "0.10"
+base64 = "0.22"
+reqwest = { workspace = true }

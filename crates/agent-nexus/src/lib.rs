@@ -25,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 pub mod a2a;
+pub mod hooks;
 
 /// Persona loaded from a `.agent.md` YAML frontmatter block.
 /// (Inlined from the deleted agent-client crate.)

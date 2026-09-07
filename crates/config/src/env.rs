@@ -47,6 +47,59 @@ impl CoderConfig {
     }
 }
 
+/// Coder Agent Lifecycle Hooks configuration (experimental).
+///
+/// These mirror the `coder server` flags that power the `agent-lifecycle-hooks`
+/// experiment (see coder/coder `docs/admin/setup/chat-lifecycle-hooks.md`).
+/// The OpenFlows Controller is the **consumer** of the deployment-wide webhook:
+/// Coder `chatd` POSTs a JWT-signed lifecycle event to `CODER_CHAT_HOOK_URL`
+/// for each `session_start` / `user_prompt_submit` / `pre_tool_use` /
+/// `post_tool_use` / `pre_compact` / `post_compact` / `stop` event, and this
+/// side verifies the signature and observes (or denies/rewrites) the event.
+///
+/// On Coder's side, enabling the experiment looks like:
+///   CODER_EXPERIMENTS=agent-lifecycle-hooks
+///   CODER_CHAT_HOOK_URL=http://<openflows-host>/hooks/chat
+///   CODER_CHAT_HOOK_SECRET=<at least 32 random bytes, HS256>
+#[derive(Debug, Clone, Envconfig)]
+pub struct CoderHooksConfig {
+    /// Where Coder POSTs lifecycle hook events (the OpenFlows consumer).
+    #[envconfig(from = "CODER_CHAT_HOOK_URL")]
+    pub chat_hook_url: Option<String>,
+
+    /// Shared HS256 secret used to sign/verify hook JWTs (>= 32 bytes).
+    #[envconfig(from = "CODER_CHAT_HOOK_SECRET")]
+    pub chat_hook_secret: Option<String>,
+
+    /// Per-request dispatch timeout Coder applies. We mirror it for awareness.
+    #[envconfig(from = "CODER_CHAT_HOOK_TIMEOUT", default = "1500")]
+    pub chat_hook_timeout_ms: u64,
+
+    /// Break-glass switch (mirrored from Coder for observability).
+    #[envconfig(from = "CODER_CHAT_HOOK_ENABLED", default = "true")]
+    pub chat_hook_enabled: bool,
+
+    /// Allow plain http (dev only).
+    #[envconfig(from = "CODER_CHAT_HOOK_ALLOW_INSECURE", default = "false")]
+    pub chat_hook_allow_insecure: bool,
+
+    /// Local bind address for the OpenFlows hook consumer endpoint.
+    #[envconfig(from = "OPENFLOWS_HOOK_ADDR", default = "127.0.0.1:3001")]
+    pub hook_addr: String,
+}
+
+impl CoderHooksConfig {
+    /// Whether the OpenFlows consumer should be started at all: only when a
+    /// hook URL is configured AND the experiment flag is on.
+    pub fn enabled(&self) -> bool {
+        self.chat_hook_enabled
+            && self.chat_hook_url.is_some()
+            && std::env::var("CODER_EXPERIMENTS")
+                .map(|v| v.split(',').any(|e| e.trim() == "agent-lifecycle-hooks"))
+                .unwrap_or(false)
+    }
+}
+
 /// Infrastructure configuration (Redis, A2A relay).
 #[derive(Debug, Clone, Envconfig)]
 pub struct InfraConfig {
@@ -153,6 +206,7 @@ impl AgentConfig {
 #[derive(Debug, Clone)]
 pub struct EnvConfig {
     pub coder: CoderConfig,
+    pub hooks: CoderHooksConfig,
     pub infra: InfraConfig,
     pub tenant: TenantConfig,
     pub github: GithubConfig,
@@ -213,9 +267,12 @@ impl EnvConfig {
             GithubConfig::init_from_env().map_err(|e| anyhow::anyhow!("GitHub config: {e}"))?;
         let agent =
             AgentConfig::init_from_env().map_err(|e| anyhow::anyhow!("Agent config: {e}"))?;
+        let hooks =
+            CoderHooksConfig::init_from_env().map_err(|e| anyhow::anyhow!("Hooks config: {e}"))?;
 
         Ok(Self {
             coder,
+            hooks,
             infra,
             tenant,
             github,

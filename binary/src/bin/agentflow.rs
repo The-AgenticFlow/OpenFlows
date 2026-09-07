@@ -51,6 +51,11 @@ enum Commands {
         #[command(subcommand)]
         action: GateCommands,
     },
+    /// Coder agent lifecycle hooks (experimental) — simulate/test the consumer
+    Hooks {
+        #[command(subcommand)]
+        action: HooksCommands,
+    },
     /// Reset orchestration files to bundled defaults
     ResetOrchestration,
 }
@@ -119,6 +124,28 @@ enum GateCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum HooksCommands {
+    /// Simulate Coder dispatching a lifecycle hook event to the consumer.
+    ///
+    /// Signs a JWT exactly like Coder's `chatd` (HS256, iss=coder,
+    /// aud=CODER_CHAT_HOOK_URL, jti=dispatch_id, body_sha256) and POSTs it to
+    /// the configured URL. Lets you exercise the consumer end-to-end without a
+    /// Coder server.
+    Simulate {
+        /// Event to dispatch (session_start, user_prompt_submit, pre_tool_use,
+        /// post_tool_use, pre_compact, post_compact, stop)
+        #[arg(long, default_value = "session_start")]
+        event: String,
+        /// Chat ID to tag the event with (defaults to a generated id)
+        #[arg(long)]
+        chat_id: Option<String>,
+        /// Optional dispatch ID (defaults to a generated one)
+        #[arg(long)]
+        dispatch_id: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load .env if present (dev / host CLI use). In the nexus workspace, vars
@@ -140,6 +167,7 @@ async fn main() -> Result<()> {
         Commands::Status { tenant, json } => run_status(tenant, json).await,
         Commands::Doctor => openflows::doctor::run_checks().await,
         Commands::Gate { action } => run_gate(action).await,
+        Commands::Hooks { action } => run_hooks(action).await,
         Commands::ResetOrchestration => run_reset().await,
     }
 }
@@ -186,6 +214,28 @@ async fn run_controller() -> Result<()> {
             None
         }
     };
+
+    // ── Coder Agent Lifecycle Hooks (experimental) ──────────────────────
+    // OpenFlows consumes Coder's deployment-wide `agent-lifecycle-hooks`
+    // webhook so we can observe (and later centrally policy) every agent
+    // lifecycle event. Gated by CODER_EXPERIMENTS=agent-lifecycle-hooks +
+    // CODER_CHAT_HOOK_URL; no-op otherwise.
+    match agent_nexus::hooks::start_lifecycle_hook_server(
+        std::sync::Arc::new(store.clone()),
+        cfg.hooks.clone(),
+    )
+    .await
+    {
+        Ok(Some(())) => tracing::info!("Coder lifecycle hook consumer started"),
+        Ok(None) => tracing::debug!("Coder lifecycle hook consumer disabled"),
+        Err(e) => {
+            // Experimental: warn but do not fail the controller boot.
+            tracing::warn!(
+                error = %e,
+                "Failed to start Coder lifecycle hook consumer; continuing without hooks"
+            );
+        }
+    }
 
     // ── Resolve orchestration directory ─────────────────────────────────
     let resolver = openflows::orchestration::OrchestrationResolver::new()?;
@@ -674,6 +724,61 @@ async fn run_gate(action: GateCommands) -> Result<()> {
         } => {
             let store = Harness::new(&redis_url, &tenant).await?;
             store.gate_status(&ticket, &phase).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_hooks(action: HooksCommands) -> Result<()> {
+    // The consumer reads these from the environment at startup, matching Coder.
+    let hook_url = std::env::var("CODER_CHAT_HOOK_URL").context(
+        "CODER_CHAT_HOOK_URL is not set. Point it at the OpenFlows hook consumer \
+         (e.g. http://127.0.0.1:3001/hooks/chat).",
+    )?;
+    let secret = std::env::var("CODER_CHAT_HOOK_SECRET").context(
+        "CODER_CHAT_HOOK_SECRET is not set. It must match the consumer's.\n\
+         Generate one with: openssl rand -hex 32",
+    )?;
+
+    match action {
+        HooksCommands::Simulate {
+            event,
+            chat_id,
+            dispatch_id,
+        } => {
+            // Generate stable-ish test ids from the process id + timestamp (no
+            // extra dependency needed in the binary crate).
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let pid = std::process::id();
+            let dispatch_id = dispatch_id
+                .unwrap_or_else(|| format!("sim-{}-{}", event.replace('_', "-"), pid));
+            let chat_id = chat_id.unwrap_or_else(|| format!("chat-sim-{}-{}", pid, ts));
+
+            println!(
+                "Simulating Coder dispatch → `{}` (event={event}, dispatch_id={dispatch_id})",
+                hook_url
+            );
+            let (status, body) = agent_nexus::hooks::dispatch_simulated_event(
+                &hook_url,
+                &secret,
+                &event,
+                &chat_id,
+                &dispatch_id,
+            )
+            .await?;
+            println!("Consumer responded with HTTP {status}");
+            if !body.trim().is_empty() {
+                println!("Response body: {body}");
+            }
+            if status == 200 || status == 204 {
+                println!("✓ Event observed by the OpenFlows hook consumer.");
+            } else {
+                println!("✗ Hook consumer rejected the event. Check the consumer logs.");
+            }
         }
     }
 
