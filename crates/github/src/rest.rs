@@ -36,24 +36,35 @@ impl GithubRestClient {
     }
 
     /// Create a client pointed at a custom API base URL (e.g. a self-hosted
-    /// Gitea server for offline/CI end-to-end tests).
+    /// Gitea server for offline/CI end-to-end tests). A blank value falls back
+    /// to the default GitHub API.
     pub fn new_with_api_base(token: impl Into<String>, api_base: impl Into<String>) -> Self {
+        let api_base = api_base.into().trim().trim_end_matches('/').to_string();
+        let api_base = if api_base.is_empty() {
+            GITHUB_API_BASE.to_string()
+        } else {
+            api_base
+        };
         Self {
             client: reqwest::Client::builder()
                 .user_agent("AgentFlow-VESSEL/0.1")
                 .build()
                 .expect("Failed to build reqwest client"),
             token: token.into(),
-            api_base: api_base.into().trim_end_matches('/').to_string(),
+            api_base,
         }
     }
 
     /// Create a client whose API base URL comes from the `GITHUB_API_BASE`
     /// environment variable, falling back to `https://api.github.com`. This
     /// lets end-to-end tests point the whole control plane at a self-hosted
-    /// Gitea server without touching each call site.
+    /// Gitea server without touching each call site. An empty/whitespace value
+    /// falls back to the default rather than producing an invalid URL.
     pub fn from_env(token: impl Into<String>) -> Self {
-        let base = std::env::var("GITHUB_API_BASE").unwrap_or_else(|_| GITHUB_API_BASE.to_string());
+        let base = std::env::var("GITHUB_API_BASE")
+            .ok()
+            .filter(|base| !base.trim().is_empty())
+            .unwrap_or_else(|| GITHUB_API_BASE.to_string());
         Self::new_with_api_base(token, base)
     }
 
@@ -348,6 +359,20 @@ impl GithubRestClient {
         } else {
             Ok(CiStatus::Success)
         }
+    }
+
+    /// Return true if any check runs exist for a commit ref.
+    ///
+    /// Honours the configured API base (GITHUB_API_BASE) so the merge-gate
+    /// path never queries `api.github.com` when the control plane is pointed at
+    /// a self-hosted Git server.
+    pub async fn has_any_check_runs(&self, owner: &str, repo: &str, ref_sha: &str) -> Result<bool> {
+        let url = format!(
+            "{}/repos/{}/{}/commits/{}/check-runs?per_page=1",
+            self.api_base, owner, repo, ref_sha
+        );
+        let resp: CheckRunsResponse = self.get_json(&url).await?;
+        Ok(!resp.check_runs.is_empty())
     }
 
     /// Get detailed information about failed CI checks for a commit ref.
@@ -1370,5 +1395,11 @@ mod tests {
         // Trailing slash is stripped so `format!("{}/repos/...", self.api_base)`
         // yields a valid URL.
         assert_eq!(client.api_base, "http://gitea:3000");
+    }
+
+    #[test]
+    fn blank_base_url_falls_back_to_default() {
+        let client = GithubRestClient::new_with_api_base("token", "  ");
+        assert_eq!(client.api_base, "https://api.github.com");
     }
 }

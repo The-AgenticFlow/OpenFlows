@@ -36,8 +36,11 @@ REPO="workbench"
 GITEA_ADMIN_USER="e2e-admin"
 GITEA_ADMIN_PASS="E2eAdmin!Passw0rd"
 GITEA_TOKEN_NAME="e2e-token"
-REDIS_CONTAINER="openflows-e2e-redis"
-GITEA_CONTAINER="openflows-e2e-gitea"
+# Unique per-run container names so cleanup only ever removes THIS invocation's
+# containers (safe under concurrent/local runs), not a foreign one.
+RUN_SUFFIX="$(date +%s)-$$"
+REDIS_CONTAINER="openflows-e2e-redis-${RUN_SUFFIX}"
+GITEA_CONTAINER="openflows-e2e-gitea-${RUN_SUFFIX}"
 CTRL_TIMEOUT="${CTRL_TIMEOUT:-45}"   # seconds the controller runs for
 
 GITEA_BASE="http://localhost:${GITEA_HTTP_PORT}"
@@ -81,16 +84,17 @@ preflight() {
 # Infrastructure
 # --------------------------------------------------------------------------
 start_infra() {
-  say "Starting real Redis + Gitea containers"
-  docker run -d --name "$REDIS_CONTAINER" -p "${REDIS_PORT}:6379" "$REDIS_IMAGE" >/dev/null \
+  say "Starting real Redis + Gitea containers (bound to loopback)"
+  # Bind to 127.0.0.1: a fixed admin account must never be reachable by network peers.
+  docker run -d --name "$REDIS_CONTAINER" -p "127.0.0.1:${REDIS_PORT}:6379" "$REDIS_IMAGE" >/dev/null \
     || { bad "failed to start Redis"; return 1; }
-  docker run -d --name "$GITEA_CONTAINER" -p "${GITEA_PORT}:3000" \
+  docker run -d --name "$GITEA_CONTAINER" -p "127.0.0.1:${GITEA_PORT}:3000" \
       -e GITEA__SECURITY__INSTALL_LOCK=true \
       -e GITEA__SERVICE__DISABLE_REGISTRATION=true \
       "$GITEA_IMAGE" >/dev/null \
     || { bad "failed to start Gitea"; return 1; }
   wait_http "$GITEA_API/version" 120 || { bad "Gitea API not healthy"; return 1; }
-  ok "Redis + Gitea containers up"
+  ok "Redis + Gitea containers up (loopback)"
   return 0
 }
 
@@ -165,22 +169,23 @@ run_controller_and_assert() {
   tail -40 "$log" || true
   echo "-----------------------------"
 
-  # Assert: a T-*** ticket landed in Redis (tenant-namespaced, query through
-  # the container's own redis-cli).
-  local ticket
+  # Assert a real persisted ticket. The canonical store is the tenant-namespaced
+  # `ns:${TENANT}:tickets` JSON list, which must contain a T-*** ticket id.
+  # (Query through the container's own redis-cli; assert actual persisted state,
+  # never a controller log line written before persistence.)
+  local tickets_json ticket
+  tickets_json="$(docker exec "$REDIS_CONTAINER" redis-cli GET "ns:${TENANT}:tickets" 2>/dev/null)"
   ticket="$(docker exec "$REDIS_CONTAINER" redis-cli --scan --pattern 'ns:*:ticket:T-*' 2>/dev/null | head -1)"
-  if [ -n "$ticket" ]; then
+  if printf '%s' "$tickets_json" | grep -qE '"id"[[:space:]]*:[[:space:]]*"T-[0-9]+"'; then
+    local tid
+    tid="$(printf '%s' "$tickets_json" | grep -oE '"id"[[:space:]]*:[[:space:]]*"T-[0-9]+"' | head -1)"
+    ok "controller synced issue into Redis tickets store ($tid)"
+  elif [ -n "$ticket" ]; then
     ok "controller created Redis ticket key: $ticket"
   else
-    # Fall back to the definitive signal from the controller log.
-    if grep -q "Synced new ticket" "$log"; then
-      ok "controller log confirms 'Synced new ticket' from the real Gitea issue"
-      ticket="(from log)"
-    else
-      bad "no 'ns:*:ticket:T-*' key in Redis and no 'Synced new ticket' in the log — issue was not synced"
-      grep -iE "sync|issue|token|github|gitea|error|panic" "$log" | tail -20 || true
-      return 1
-    fi
+    bad "no ticket in Redis 'ns:${TENANT}:tickets' store and no 'ns:*:ticket:T-*' key — issue was not synced"
+    grep -iE "sync|issue|token|github|gitea|error|panic" "$log" | tail -20 || true
+    return 1
   fi
 
   # Report the stages that are gated on the full stack.
@@ -193,6 +198,12 @@ main() {
   say "OpenFlows real-dependency E2E (issue -> ticket via Gitea)"
   CTRL_BIN="${CTRL_BIN:-$(pwd)/target/debug/openflows}"
   if ! preflight; then
+    if [ "${CI:-}" = "true" ]; then
+      # In CI the E2E job runs on a Docker-enabled runner; a skip here means a
+      # real regression in setup, so fail loudly rather than report a silent green.
+      echo "FAIL: E2E skipped in CI (${SKIP} prereq skipped) — coverage silently lost"
+      exit 1
+    fi
     say "SKIPPED — prereqs unavailable; nothing was asserted."
     echo "RESULT: SKIP (${SKIP} skipped)"
     exit 0
