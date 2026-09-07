@@ -18,24 +18,54 @@ use tracing::{debug, info, warn};
 const MAX_RETRIES: u32 = 3;
 const RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 
-const GITHUB_API_BASE: &str = "https://api.github.com";
+/// Default GitHub REST API base URL.
+pub const GITHUB_API_BASE: &str = "https://api.github.com";
 
 /// Direct GitHub REST API client for CI status polling and merge operations.
 #[derive(Clone)]
 pub struct GithubRestClient {
     client: reqwest::Client,
     token: String,
+    api_base: String,
 }
 
 impl GithubRestClient {
+    /// Create a client pointed at the default GitHub API (`https://api.github.com`).
     pub fn new(token: impl Into<String>) -> Self {
+        Self::new_with_api_base(token, GITHUB_API_BASE)
+    }
+
+    /// Create a client pointed at a custom API base URL (e.g. a self-hosted
+    /// Gitea server for offline/CI end-to-end tests). A blank value falls back
+    /// to the default GitHub API.
+    pub fn new_with_api_base(token: impl Into<String>, api_base: impl Into<String>) -> Self {
+        let api_base = api_base.into().trim().trim_end_matches('/').to_string();
+        let api_base = if api_base.is_empty() {
+            GITHUB_API_BASE.to_string()
+        } else {
+            api_base
+        };
         Self {
             client: reqwest::Client::builder()
                 .user_agent("AgentFlow-VESSEL/0.1")
                 .build()
                 .expect("Failed to build reqwest client"),
             token: token.into(),
+            api_base,
         }
+    }
+
+    /// Create a client whose API base URL comes from the `GITHUB_API_BASE`
+    /// environment variable, falling back to `https://api.github.com`. This
+    /// lets end-to-end tests point the whole control plane at a self-hosted
+    /// Gitea server without touching each call site. An empty/whitespace value
+    /// falls back to the default rather than producing an invalid URL.
+    pub fn from_env(token: impl Into<String>) -> Self {
+        let base = std::env::var("GITHUB_API_BASE")
+            .ok()
+            .filter(|base| !base.trim().is_empty())
+            .unwrap_or_else(|| GITHUB_API_BASE.to_string());
+        Self::new_with_api_base(token, base)
     }
 
     fn auth_header(&self) -> String {
@@ -259,7 +289,7 @@ impl GithubRestClient {
     ) -> Result<CiStatus> {
         let url = format!(
             "{}/repos/{}/{}/commits/{}/status",
-            GITHUB_API_BASE, owner, repo, ref_sha
+            self.api_base, owner, repo, ref_sha
         );
         let resp: CombinedStatusResponse = self.get_json(&url).await?;
         Ok(map_status_state(&resp.state))
@@ -275,7 +305,7 @@ impl GithubRestClient {
     ) -> Result<CiStatus> {
         let url = format!(
             "{}/repos/{}/{}/commits/{}/check-suites",
-            GITHUB_API_BASE, owner, repo, ref_sha
+            self.api_base, owner, repo, ref_sha
         );
         let resp: CheckSuitesResponse = self.get_json(&url).await?;
 
@@ -331,6 +361,20 @@ impl GithubRestClient {
         }
     }
 
+    /// Return true if any check runs exist for a commit ref.
+    ///
+    /// Honours the configured API base (GITHUB_API_BASE) so the merge-gate
+    /// path never queries `api.github.com` when the control plane is pointed at
+    /// a self-hosted Git server.
+    pub async fn has_any_check_runs(&self, owner: &str, repo: &str, ref_sha: &str) -> Result<bool> {
+        let url = format!(
+            "{}/repos/{}/{}/commits/{}/check-runs?per_page=1",
+            self.api_base, owner, repo, ref_sha
+        );
+        let resp: CheckRunsResponse = self.get_json(&url).await?;
+        Ok(!resp.check_runs.is_empty())
+    }
+
     /// Get detailed information about failed CI checks for a commit ref.
     /// Returns a human-readable summary of which checks failed, their conclusions,
     /// and the error details from the check output and annotations.
@@ -356,7 +400,7 @@ impl GithubRestClient {
     ) -> Result<CiFailureDetail> {
         let url = format!(
             "{}/repos/{}/{}/commits/{}/check-runs",
-            GITHUB_API_BASE, owner, repo, ref_sha
+            self.api_base, owner, repo, ref_sha
         );
         let resp: CheckRunsResponse = match self.get_json(&url).await {
             Ok(r) => r,
@@ -467,7 +511,7 @@ impl GithubRestClient {
     ) -> Result<Vec<CheckAnnotation>> {
         let url = format!(
             "{}/repos/{}/{}/check-runs/{}/annotations",
-            GITHUB_API_BASE, owner, repo, check_run_id
+            self.api_base, owner, repo, check_run_id
         );
         let annotations: Vec<CheckAnnotation> = match self.get_json(&url).await {
             Ok(a) => a,
@@ -489,7 +533,7 @@ impl GithubRestClient {
     ) -> Result<String> {
         let url = format!(
             "{}/repos/{}/{}/commits/{}/check-suites",
-            GITHUB_API_BASE, owner, repo, ref_sha
+            self.api_base, owner, repo, ref_sha
         );
         let resp: serde_json::Value = self.get_json_raw(&url).await?;
 
@@ -528,7 +572,7 @@ impl GithubRestClient {
     ) -> Result<PrInfo> {
         let url = format!(
             "{}/repos/{}/{}/pulls/{}",
-            GITHUB_API_BASE, owner, repo, pr_number
+            self.api_base, owner, repo, pr_number
         );
         let resp: PullRequestResponse = self.get_json(&url).await?;
 
@@ -560,7 +604,7 @@ impl GithubRestClient {
     ) -> Result<MergeResult> {
         let url = format!(
             "{}/repos/{}/{}/pulls/{}/merge",
-            GITHUB_API_BASE, owner, repo, pr_number
+            self.api_base, owner, repo, pr_number
         );
 
         let body = MergeRequestBody {
@@ -588,7 +632,7 @@ impl GithubRestClient {
     ) -> Result<()> {
         let close_url = format!(
             "{}/repos/{}/{}/pulls/{}",
-            GITHUB_API_BASE, owner, repo, pr_number
+            self.api_base, owner, repo, pr_number
         );
         let close_body = serde_json::json!({ "state": "closed" });
 
@@ -597,7 +641,7 @@ impl GithubRestClient {
             Some(text) => {
                 let comment_url = format!(
                     "{}/repos/{}/{}/issues/{}/comments",
-                    GITHUB_API_BASE, owner, repo, pr_number
+                    self.api_base, owner, repo, pr_number
                 );
                 let comment_body = serde_json::json!({ "body": text });
 
@@ -642,7 +686,7 @@ impl GithubRestClient {
 
         let url = format!(
             "{}/repos/{}/{}/contents/.github/workflows",
-            GITHUB_API_BASE, owner, repo
+            self.api_base, owner, repo
         );
 
         let resp = self.send_with_retry(|| self.build_get(&url)).await?;
@@ -684,7 +728,7 @@ impl GithubRestClient {
     async fn content_path_exists(&self, owner: &str, repo: &str, path: &str) -> Result<bool> {
         let url = format!(
             "{}/repos/{}/{}/contents/{}",
-            GITHUB_API_BASE, owner, repo, path
+            self.api_base, owner, repo, path
         );
         let resp = self.send_with_retry(|| self.build_get(&url)).await?;
         let status = resp.status();
@@ -714,7 +758,7 @@ impl GithubRestClient {
     pub async fn list_open_prs(&self, owner: &str, repo: &str) -> Result<Vec<PrInfo>> {
         let url = format!(
             "{}/repos/{}/{}/pulls?state=open&per_page=100",
-            GITHUB_API_BASE, owner, repo
+            self.api_base, owner, repo
         );
         let resp: Vec<PullRequestResponse> = self.get_json(&url).await?;
 
@@ -745,7 +789,7 @@ impl GithubRestClient {
         base: &str,
         body: Option<&str>,
     ) -> Result<u64> {
-        let url = format!("{}/repos/{}/{}/pulls", GITHUB_API_BASE, owner, repo);
+        let url = format!("{}/repos/{}/{}/pulls", self.api_base, owner, repo);
 
         let request_body = serde_json::json!({
             "title": title,
@@ -781,7 +825,7 @@ impl GithubRestClient {
     ) -> Result<Vec<GitHubIssueResponse>> {
         let url = format!(
             "{}/repos/{}/{}/issues?state=open&per_page=100",
-            GITHUB_API_BASE, owner, repo
+            self.api_base, owner, repo
         );
         self.get_json(&url).await
     }
@@ -789,7 +833,7 @@ impl GithubRestClient {
     /// Get the authenticated user's login name using the current token.
     /// Calls GET /user and returns the "login" field.
     pub async fn get_authenticated_user_login(&self) -> Result<String> {
-        let url = format!("{}/user", GITHUB_API_BASE);
+        let url = format!("{}/user", self.api_base);
         let resp = self.send_with_retry(|| self.build_get(&url)).await?;
 
         let status = resp.status();
@@ -825,7 +869,7 @@ impl GithubRestClient {
     ) -> Result<bool> {
         let url = format!(
             "{}/repos/{}/{}/issues/{}/comments?per_page=100",
-            GITHUB_API_BASE, owner, repo, issue_number
+            self.api_base, owner, repo, issue_number
         );
         let comments: Vec<serde_json::Value> = self.get_json(&url).await?;
         Ok(comments.iter().any(|c| {
@@ -846,7 +890,7 @@ impl GithubRestClient {
     ) -> Result<()> {
         let url = format!(
             "{}/repos/{}/{}/issues/{}/comments",
-            GITHUB_API_BASE, owner, repo, issue_number
+            self.api_base, owner, repo, issue_number
         );
         let payload = serde_json::json!({ "body": comment_body });
         let body_bytes = serde_json::to_vec(&payload)?;
@@ -887,7 +931,7 @@ impl GithubRestClient {
     ) -> Result<()> {
         let url = format!(
             "{}/repos/{}/{}/issues/{}",
-            GITHUB_API_BASE, owner, repo, issue_number
+            self.api_base, owner, repo, issue_number
         );
         let body = serde_json::json!({ "assignees": [assignee] });
 
@@ -931,7 +975,7 @@ impl GithubRestClient {
     pub async fn close_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<()> {
         let url = format!(
             "{}/repos/{}/{}/issues/{}",
-            GITHUB_API_BASE, owner, repo, issue_number
+            self.api_base, owner, repo, issue_number
         );
         let body = serde_json::json!({ "state": "closed" });
         let resp: serde_json::Value = self.patch_json(&url, &body).await?;
@@ -954,7 +998,7 @@ impl GithubRestClient {
     pub async fn update_branch(&self, owner: &str, repo: &str, pr_number: u64) -> Result<()> {
         let url = format!(
             "{}/repos/{}/{}/pulls/{}/update-branch",
-            GITHUB_API_BASE, owner, repo, pr_number
+            self.api_base, owner, repo, pr_number
         );
 
         let resp = self.send_with_retry(|| self.build_put(&url, &[])).await?;
@@ -983,7 +1027,7 @@ impl GithubRestClient {
     ) -> Result<Vec<String>> {
         let url = format!(
             "{}/repos/{}/{}/pulls/{}/files",
-            GITHUB_API_BASE, owner, repo, pr_number
+            self.api_base, owner, repo, pr_number
         );
 
         let resp: Vec<PrFileResponse> = self.get_json(&url).await?;
@@ -1009,7 +1053,7 @@ impl GithubRestClient {
     ) -> Result<Vec<(String, String)>> {
         let url = format!(
             "{}/repos/{}/{}/actions/runs?head_sha={}&status=failure&per_page=10",
-            GITHUB_API_BASE, owner, repo, head_sha
+            self.api_base, owner, repo, head_sha
         );
 
         let runs_resp: WorkflowRunsResponse = match self.get_json(&url).await {
@@ -1027,7 +1071,7 @@ impl GithubRestClient {
 
             let jobs_url = format!(
                 "{}/repos/{}/{}/actions/runs/{}/jobs?per_page=50",
-                GITHUB_API_BASE, owner, repo, run.id
+                self.api_base, owner, repo, run.id
             );
 
             let jobs_resp: WorkflowJobsResponse = match self.get_json(&jobs_url).await {
@@ -1047,7 +1091,7 @@ impl GithubRestClient {
 
                 let log_url = format!(
                     "{}/repos/{}/{}/actions/jobs/{}/logs",
-                    GITHUB_API_BASE, owner, repo, job.id
+                    self.api_base, owner, repo, job.id
                 );
 
                 match self.get_text(&log_url).await {
@@ -1333,4 +1377,29 @@ struct WorkflowJob {
     name: Option<String>,
     #[serde(default)]
     conclusion: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_client_points_at_api_github_com() {
+        let client = GithubRestClient::new("token");
+        assert_eq!(client.api_base, "https://api.github.com");
+    }
+
+    #[test]
+    fn custom_base_url_is_normalized_and_stored() {
+        let client = GithubRestClient::new_with_api_base("token", "http://gitea:3000/");
+        // Trailing slash is stripped so `format!("{}/repos/...", self.api_base)`
+        // yields a valid URL.
+        assert_eq!(client.api_base, "http://gitea:3000");
+    }
+
+    #[test]
+    fn blank_base_url_falls_back_to_default() {
+        let client = GithubRestClient::new_with_api_base("token", "  ");
+        assert_eq!(client.api_base, "https://api.github.com");
+    }
 }

@@ -33,7 +33,6 @@ use crate::{CiPoller, PrMerger, VesselNotifier};
 /// 2. exec: Poll CI, detect conflicts, resolve if possible, merge if green, return outcomes
 /// 3. post: Emit events, update tickets, return routing action
 pub struct VesselNode {
-    config: VesselConfig,
     client: github::GithubRestClient,
     poller: CiPoller,
     merger: PrMerger,
@@ -59,13 +58,12 @@ struct CiFixPrInfo {
 
 impl VesselNode {
     pub fn new(config: VesselConfig) -> Self {
-        let client = github::GithubRestClient::new(&config.github_token);
+        let client = github::GithubRestClient::from_env(&config.github_token);
 
         Self {
             poller: CiPoller::new(config.ci_poll.clone(), client.clone()),
             merger: PrMerger::new(client.clone(), config.merge_method),
             client,
-            config,
         }
     }
 
@@ -1266,34 +1264,19 @@ impl Node for VesselNode {
 impl VesselNode {
     /// Check if any check runs exist for a commit by querying check-runs API.
     /// Returns true if total_count > 0.
+    ///
+    /// Routes through the configured `GithubRestClient` (which honours
+    /// GITHUB_API_BASE) so the merge gate never queries `api.github.com` when
+    /// pointed at a self-hosted Git server. A transient API failure is treated
+    /// as "no check runs" (lenient) to preserve prior behavior.
     async fn has_any_check_runs(&self, owner: &str, repo: &str, sha: &str) -> Result<bool> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/commits/{}/check-runs?per_page=1",
-            owner, repo, sha
-        );
-
-        let client = reqwest::Client::builder()
-            .user_agent("AgentFlow-VESSEL/0.1")
-            .build()?;
-
-        let resp = client
-            .get(&url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.config.github_token),
-            )
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Ok(false);
+        match self.client.has_any_check_runs(owner, repo, sha).await {
+            Ok(has) => Ok(has),
+            Err(e) => {
+                tracing::warn!(error = %e, owner, repo, "Failed to check for check runs; assuming none");
+                Ok(false)
+            }
         }
-
-        let body: serde_json::Value = resp.json().await.unwrap_or_default();
-        let total = body["total_count"].as_u64().unwrap_or(0);
-        Ok(total > 0)
     }
 
     /// Process a single PR: poll CI → detect conflicts → resolve if possible → merge if green → return outcome.
