@@ -140,10 +140,14 @@ enum HooksCommands {
         /// Chat ID to tag the event with (defaults to a generated id)
         #[arg(long)]
         chat_id: Option<String>,
-        /// Optional dispatch ID (defaults to a generated one)
-        #[arg(long)]
-        dispatch_id: Option<String>,
+    /// Optional dispatch ID (defaults to a generated one)
+    #[arg(long)]
+    dispatch_id: Option<String>,
     },
+    /// Run the hook consumer standalone (dev/test). Uses an in-memory store so
+    /// it needs no Redis or Coder. Require CODER_EXPERIMENTS=agent-lifecycle-hooks,
+    /// CODER_CHAT_HOOK_URL and CODER_CHAT_HOOK_SECRET at startup.
+    Serve,
 }
 
 #[tokio::main]
@@ -778,6 +782,38 @@ async fn run_hooks(action: HooksCommands) -> Result<()> {
                 println!("✓ Event observed by the OpenFlows hook consumer.");
             } else {
                 println!("✗ Hook consumer rejected the event. Check the consumer logs.");
+            }
+        }
+        HooksCommands::Serve => {
+            // Standalone consumer for local testing: in-memory store (no Redis),
+            // so `openflows hooks simulate` can fire events at it end-to-end.
+            let cfg = config::EnvConfig::from_env().context(
+                "failed to load environment configuration (CODER_CHAT_HOOK_URL and \
+                 CODER_CHAT_HOOK_SECRET must be exported alongside \
+                 CODER_EXPERIMENTS=agent-lifecycle-hooks)",
+            )?;
+            let store =
+                std::sync::Arc::new(pocketflow_core::SharedStore::new_in_memory());
+            tracing::info!(
+                hook_url = %hook_url,
+                "Starting standalone lifecycle hook consumer (in-memory store)"
+            );
+            match agent_nexus::hooks::start_lifecycle_hook_server(store, cfg.hooks.clone()).await
+            {
+                Ok(Some(())) => {
+                    println!("Listening on {}", cfg.hooks.hook_addr);
+                    println!("Configure `openflows hooks simulate` with the same CODER_CHAT_HOOK_URL and CODER_CHAT_HOOK_SECRET.");
+                    // Keep the process alive serving requests.
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    }
+                }
+                Ok(None) => {
+                    anyhow::bail!(
+                        "consumer not started: set CODER_EXPERIMENTS=agent-lifecycle-hooks and CODER_CHAT_HOOK_URL"
+                    );
+                }
+                Err(e) => anyhow::bail!("failed to start consumer: {e:#}"),
             }
         }
     }
