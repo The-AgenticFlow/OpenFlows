@@ -150,12 +150,15 @@ run_controller_and_assert() {
   local log
   log="$(mktemp)"
   # Redirect so the controller (on the host) reaches Gitea's GitHub-shaped API.
+  # CODER_SESSION_TOKEN is hard-required by the controller at startup; this E2E
+  # subset does not talk to a real Coder server, so a placeholder is sufficient.
   GITHUB_API_BASE="$GITEA_CONTROLLER_BASE" \
   GITHUB_TOKEN="$GITEA_TOKEN" \
   GITHUB_REPOSITORY="$OWNER/$REPO" \
   OPENFLOWS_TENANT="$TENANT" \
   REDIS_URL="redis://localhost:${REDIS_PORT}" \
   CODER_URL="http://localhost:${GITEA_PORT}" \
+  CODER_SESSION_TOKEN="e2e-session-token" \
   timeout "$CTRL_TIMEOUT" "$CTRL_BIN" >"$log" 2>&1 || true
 
   echo "--- controller log (tail) ---"
