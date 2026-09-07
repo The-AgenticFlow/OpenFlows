@@ -2709,7 +2709,7 @@ Use `openflows-harness` for all coordination:
         let worker_entry = registry.get(&base_id);
 
         // Resolve the worker's GitHub token. resolve_github_token() falls back
-        // to GITHUB_PERSONAL_ACCESS_TOKEN when no dedicated github_token_env is
+        // to GITHUB_TOKEN when no dedicated github_token_env is
         // configured on the registry entry, so agents without a per-agent token
         // still work as long as the fallback env var is set. We do NOT hard-fail
         // on a missing github_token_env field — that would block all v2-style
@@ -2725,7 +2725,7 @@ Use `openflows-harness` for all coordination:
             let env_var_name = worker_entry
                 .as_ref()
                 .and_then(|e| e.github_token_env.as_deref())
-                .unwrap_or("GITHUB_PERSONAL_ACCESS_TOKEN");
+                .unwrap_or("GITHUB_TOKEN");
             let comment = format!(
                 "<!-- openflows-assignment-failure -->\n\
                  ⚠️ **Could not assign this issue to `{}`** — the agent's GitHub token could not \

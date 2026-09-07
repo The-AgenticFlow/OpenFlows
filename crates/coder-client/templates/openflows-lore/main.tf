@@ -63,13 +63,13 @@ resource "coder_agent" "main" {
     OWNER_ID="${data.coder_workspace_owner.me.id}"
     
     if [ -n "$CODER_URL" ] && [ -n "$CODER_AGENT_TOKEN" ] && [ -n "$OWNER_ID" ]; then
-      GITHUB_TOKEN=$(curl -s \
+      API_TOKEN=$(curl -s \
         -H "Coder-Session-Token: $CODER_AGENT_TOKEN" \
         "$CODER_URL/api/v2/users/$OWNER_ID/gitauths/github" 2>/dev/null \
         | jq -r '.access_token // empty')
-      
-      # Fallback to env var if API call fails
-      GITHUB_TOKEN="$${GITHUB_TOKEN:-$GITHUB_PERSONAL_ACCESS_TOKEN}"
+
+      # Fall back to the injected GITHUB_TOKEN env var if the API returned nothing
+      GITHUB_TOKEN="$${API_TOKEN:-$GITHUB_TOKEN}"
       
       # Configure git with token for HTTPS push auth
       if [ -n "$GITHUB_TOKEN" ]; then

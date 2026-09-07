@@ -315,8 +315,8 @@ impl IdentityManager {
         let token = match &entry.github_token_env {
             Some(env_var) => std::env::var(env_var)
                 .with_context(|| format!("{} not set for agent {}", env_var, entry.id))?,
-            None => std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN")
-                .context("GITHUB_PERSONAL_ACCESS_TOKEN not set (fallback for agent without github_token_env)")?,
+            None => std::env::var("GITHUB_TOKEN")
+                .context("GITHUB_TOKEN not set (fallback for agent without github_token_env)")?,
         };
 
         {
@@ -460,7 +460,7 @@ mod tests {
     }
 
     fn setup_test_token() {
-        std::env::set_var("GITHUB_PERSONAL_ACCESS_TOKEN", "test-token");
+        std::env::set_var("GITHUB_TOKEN", "test-token");
     }
 
     #[test]

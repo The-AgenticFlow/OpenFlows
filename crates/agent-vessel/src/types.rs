@@ -32,7 +32,7 @@ impl VesselConfig {
     }
 
     pub fn from_env() -> Self {
-        let github_token = std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN")
+        let github_token = std::env::var("GITHUB_TOKEN")
             .or_else(|_| std::env::var("CODER_GITHUB_TOKEN"))
             .unwrap_or_default();
 
