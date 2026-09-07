@@ -31,11 +31,11 @@ the new centralized `crates/config/src/env.rs` layer.
 | `CODER_IMAGE_TAG` | binary/doctor | in-use | `CoderConfig.image_tag` (default `latest`) |
 | `CODER_TRANSPORT_VERBOSE` | provisioner/transport | confusing | **Excluded from centralized layer** |
 | `CODER_WORKSPACE_ID` | openflows-harness/store | confusing | **Excluded from centralized layer** (read inline with default only) |
-| `CODER_EXTERNAL_AUTH_0_ID` | binary/doctor | in-use | `CoderConfig.external_auth_id` |
-| `CODER_EXTERNAL_AUTH_0_SECRET` | binary/doctor | in-use | `CoderConfig.external_auth_secret` |
-| `REDIS_URL` | binary, debug, doctor | in-use · duplicated | `InfraConfig.redis_url` (default `redis://localhost:6379`) |
+| `CODER_EXTERNAL_AUTH_0_CLIENT_ID` | .env.example, docker-compose | in-use | `CoderConfig.external_auth_client_id` (canonical; `CODER_EXTERNAL_AUTH_0_ID` remains an inline read in binary/doctor) |
+| `CODER_EXTERNAL_AUTH_0_CLIENT_SECRET` | .env.example, docker-compose | in-use | `CoderConfig.external_auth_client_secret` (canonical; `CODER_EXTERNAL_AUTH_0_SECRET` remains an inline read in binary/doctor) |
+| `REDIS_URL` | binary, debug, doctor, harness | required (harness) | `InfraConfig.redis_url` (Option; `effective_redis_url()` default `redis://localhost:6379`; harness requires it) |
 | `A2A_RELAY_ADDR` | agent-nexus/a2a, harness/a2a_client | in-use · duplicated | `InfraConfig.a2a_relay_addr` (default `127.0.0.1:3000`) |
-| `OPENFLOWS_TENANT` | coder-client, pocketflow-core, nexus, harness, binary | required · duplicated | `TenantConfig.tenant` (default `default`; required in controller) |
+| `OPENFLOWS_TENANT` | coder-client, pocketflow-core, nexus, harness, binary | required (controller/harness) | `TenantConfig.tenant` (Option; `effective_tenant()` default `default`; required in controller) |
 | `OPENFLOWS_TICKET` | openflows-harness | required | `TenantConfig.ticket` |
 | `OPENFLOWS_ROLE` | openflows-harness | required | `TenantConfig.role` |
 | `OPENFLOWS_HOME` | agent-vessel, binary/orchestration | in-use | `TenantConfig.home` (default `~/.openflows`) |
