@@ -358,7 +358,7 @@ Before significant work, read the relevant skill file to understand the workflow
             },
         };
 
-        let client = github::GithubRestClient::new(&token);
+        let client = github::GithubRestClient::from_env(&token);
         let gh_issues = match client.list_open_issues(owner, repo_name).await {
             Ok(issues) => issues,
             Err(e) => {
@@ -435,7 +435,7 @@ Before significant work, read the relevant skill file to understand the workflow
             },
         };
 
-        let client = github::GithubRestClient::new(&token);
+        let client = github::GithubRestClient::from_env(&token);
         let gh_prs = match client.list_open_prs(owner, repo_name).await {
             Ok(prs) => prs,
             Err(e) => {
@@ -2456,7 +2456,7 @@ Use `openflows-harness` for all coordination:
             },
         };
 
-        let client = github::GithubRestClient::new(&token);
+        let client = github::GithubRestClient::from_env(&token);
         match client.has_workflows(owner, repo_name).await {
             Ok(true) => {
                 info!("CI workflows found in repository — CI is ready");
@@ -2695,7 +2695,7 @@ Use `openflows-harness` for all coordination:
             }
         };
 
-        let nexus_client = github::GithubRestClient::new(&nexus_token);
+        let nexus_client = github::GithubRestClient::from_env(&nexus_token);
 
         let identity_manager = config::IdentityManager::load(&self.registry_path)
             .context("Failed to load IdentityManager from registry")?;
@@ -2746,7 +2746,7 @@ Use `openflows-harness` for all coordination:
         }
 
         let worker_token = worker_token_result.unwrap();
-        let worker_client = github::GithubRestClient::new(&worker_token);
+        let worker_client = github::GithubRestClient::from_env(&worker_token);
         let username_result = worker_client.get_authenticated_user_login().await;
         if let Err(e) = &username_result {
             warn!(

@@ -59,7 +59,7 @@ struct CiFixPrInfo {
 
 impl VesselNode {
     pub fn new(config: VesselConfig) -> Self {
-        let client = github::GithubRestClient::new(&config.github_token);
+        let client = github::GithubRestClient::from_env(&config.github_token);
 
         Self {
             poller: CiPoller::new(config.ci_poll.clone(), client.clone()),
