@@ -226,12 +226,12 @@ pub struct AgentConfig {
 
     /// Whether the AI gateway is enabled.
     #[envconfig(from = "USE_AI_GATEWAY")]
-    pub use_ai_gateway: Option<bool>,
+    pub use_ai_gateway: Option<String>,
 
     /// Whether the bootstrapper should create the Nexus control-plane
-    /// workspace. Defaults to enabled; only an explicit `false` disables it.
+    /// workspace.
     #[envconfig(from = "OPENFLOWS_CREATE_NEXUS_WORKSPACE")]
-    pub create_nexus_workspace: Option<bool>,
+    pub create_nexus_workspace: Option<String>,
 
     /// The role this process runs as (e.g. `nexus`).
     #[envconfig(from = "ROLE")]
@@ -248,7 +248,13 @@ impl AgentConfig {
 
     /// Whether the AI gateway is enabled.
     pub fn use_ai_gateway_enabled(&self) -> bool {
-        self.use_ai_gateway.unwrap_or(false)
+        matches!(self.use_ai_gateway.as_deref(), Some("true" | "1"))
+    }
+
+    /// Whether the bootstrapper should create the Nexus control-plane
+    /// workspace.
+    pub fn create_nexus_workspace_enabled(&self) -> bool {
+        self.create_nexus_workspace.as_deref() != Some("false")
     }
 }
 
@@ -426,16 +432,47 @@ mod tests {
     }
 
     #[test]
-    fn ai_gateway_accepts_valid_values() {
+    fn ai_gateway_accepts_valid_values_without_aborting() {
         let _g = ENV_LOCK.lock().unwrap();
         let _guard = EnvGuard::capture(&["USE_AI_GATEWAY"]);
-        for (v, expected) in [("true", true), ("false", false)] {
+        for (v, expected) in [
+            ("true", true),
+            ("1", true),
+            ("false", false),
+            ("garbage", false),
+        ] {
             std::env::set_var("USE_AI_GATEWAY", v);
             let cfg = EnvConfig::from_env().unwrap();
             assert_eq!(
                 cfg.agent.use_ai_gateway_enabled(),
                 expected,
                 "USE_AI_GATEWAY={v}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_nexus_workspace_is_lenient_and_defaults_enabled() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::capture(&["OPENFLOWS_CREATE_NEXUS_WORKSPACE"]);
+        std::env::remove_var("OPENFLOWS_CREATE_NEXUS_WORKSPACE");
+        assert!(EnvConfig::from_env()
+            .unwrap()
+            .agent
+            .create_nexus_workspace_enabled());
+
+        for (v, expected) in [
+            ("false", false),
+            ("true", true),
+            ("1", true),
+            ("garbage", true),
+        ] {
+            std::env::set_var("OPENFLOWS_CREATE_NEXUS_WORKSPACE", v);
+            let cfg = EnvConfig::from_env().unwrap();
+            assert_eq!(
+                cfg.agent.create_nexus_workspace_enabled(),
+                expected,
+                "OPENFLOWS_CREATE_NEXUS_WORKSPACE={v}"
             );
         }
     }

@@ -33,6 +33,10 @@ the new centralized `crates/config/src/env.rs` layer.
 | `CODER_WORKSPACE_ID` | openflows-harness/store | confusing | **Excluded from centralized layer** (read inline with default only) |
 | `CODER_EXTERNAL_AUTH_0_CLIENT_ID` | .env.example, docker-compose | in-use | `CoderConfig.external_auth_client_id` (canonical; `CODER_EXTERNAL_AUTH_0_ID` remains an inline read in binary/doctor) |
 | `CODER_EXTERNAL_AUTH_0_CLIENT_SECRET` | .env.example, docker-compose | in-use | `CoderConfig.external_auth_client_secret` (canonical; `CODER_EXTERNAL_AUTH_0_SECRET` remains an inline read in binary/doctor) |
+| `CODER_EXTERNAL_AUTH_0_ID` | .env.example, binary/doctor | in-use · inline | OIDC external-auth provider ID (inline read; not centralized) |
+| `CODER_EXTERNAL_AUTH_0_TYPE` | .env.example | in-use · Coder-side | External-auth provider type (e.g. `github`); Coder config, not centralized |
+| `CODER_EXTERNAL_AUTH_0_SCOPES` | .env.example | in-use · Coder-side | External-auth requested scopes (e.g. `repo`); Coder config, not centralized |
+| `CODER_EXTERNAL_AUTH_0_APP_INSTALL_URL` | .env.example | in-use · Coder-side | GitHub App install URL surfaced in the Coder UI; not centralized |
 | `REDIS_URL` | binary, debug, doctor, harness | required (harness) | `InfraConfig.redis_url` (Option; `effective_redis_url()` default `redis://localhost:6379`; harness requires it) |
 | `A2A_RELAY_ADDR` | agent-nexus/a2a, harness/a2a_client | in-use · duplicated | `InfraConfig.a2a_relay_addr` (default `127.0.0.1:3000`) |
 | `OPENFLOWS_TENANT` | coder-client, pocketflow-core, nexus, harness, binary | required (controller/harness) | `TenantConfig.tenant` (Option; `effective_tenant()` default `default`; required in controller) |
@@ -54,9 +58,9 @@ the new centralized `crates/config/src/env.rs` layer.
 | `GITHUB_REPOSITORY` | coder-client, nexus, binary | required | `GithubConfig.repository` |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | coder-client, agent-lore, vessel, config | required | `GithubConfig.personal_access_token`; `effective_token()` |
 | `GITHUB_API_BASE` | github/rest | in-use | `GithubConfig.api_base` (default `https://api.github.com`); `GithubRestClient::new` resolves it via `GithubConfig::init_from_env()` |
-| `USE_AI_GATEWAY` | config/registry | in-use | `AgentConfig.use_ai_gateway` (bool) |
+| `USE_AI_GATEWAY` | config/registry | in-use | `AgentConfig.use_ai_gateway` (lenient string; `"true"`/`"1"` enabled via `use_ai_gateway_enabled()`, consistent with `registry::resolve_ai_gateway_enabled`) |
 | `ROLE` | coder-client/bootstrap | in-use | `AgentConfig.role` |
-| `OPENFLOWS_CREATE_NEXUS_WORKSPACE` | coder-client/bootstrap | in-use | `AgentConfig.create_nexus_workspace` (bool; default enabled) |
+| `OPENFLOWS_CREATE_NEXUS_WORKSPACE` | coder-client/bootstrap | in-use | `AgentConfig.create_nexus_workspace_enabled()` (lenient string; default enabled, only `"false"` disables) |
 | `DEFAULT_CLI` | config/registry | in-use | keep (registry-specific) |
 | `SLACK_WEBHOOK_URL` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
 | `DISCORD_WEBHOOK_URL` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |

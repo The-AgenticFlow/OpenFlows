@@ -233,7 +233,7 @@ impl CoderBootstrapper {
         // any stale workspace. If creation is disabled, we must preserve the
         // existing one.
         let env_cfg = load_env(env)?;
-        let create_nexus_workspace = env_cfg.agent.create_nexus_workspace.unwrap_or(true)
+        let create_nexus_workspace = env_cfg.agent.create_nexus_workspace_enabled()
             && env_cfg.agent.role.as_deref() != Some("nexus");
 
         // Track template push failures — bootstrap must fail if required
