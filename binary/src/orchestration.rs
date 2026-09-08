@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use config::Envconfig;
 use tracing::{info, warn};
 
 use crate::bundled::bundled_files;
@@ -17,11 +18,8 @@ pub struct OrchestrationResolver {
 
 impl OrchestrationResolver {
     pub fn new() -> Result<Self> {
-        let openflows_home = std::env::var("OPENFLOWS_HOME")
-            .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.openflows", h)))
-            .or_else(|_| std::env::var("USERPROFILE").map(|h| format!("{}/.openflows", h)))
-            .ok();
-        let openflows_home_path = openflows_home.map(std::path::PathBuf::from);
+        let tenant = config::TenantConfig::init_from_env()?;
+        let openflows_home_path = Some(tenant.openflows_home());
 
         let mut candidates: Vec<std::path::PathBuf> = Vec::new();
 
@@ -66,15 +64,7 @@ impl OrchestrationResolver {
                 }
             })
             .unwrap_or_else(|| {
-                let home = openflows_home_path.unwrap_or_else(|| {
-                    let home = std::env::var("OPENFLOWS_HOME")
-                        .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.openflows", h)))
-                        .or_else(|_| {
-                            std::env::var("USERPROFILE").map(|h| format!("{}/.openflows", h))
-                        })
-                        .unwrap_or_else(|_| ".openflows".to_string());
-                    std::path::PathBuf::from(home)
-                });
+                let home = tenant.openflows_home();
                 (home, false)
             });
 

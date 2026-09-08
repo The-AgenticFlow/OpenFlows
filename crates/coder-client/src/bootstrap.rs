@@ -7,6 +7,8 @@
 
 use crate::{CoderClient, CreateWorkspaceRequest};
 use anyhow::Result;
+use config::{CoderConfig, GithubConfig, TenantConfig};
+use envconfig::Envconfig;
 use serde_json::json;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -50,12 +52,10 @@ impl CoderBootstrapper {
     /// (uppercase, lowercase, digit, special character, min 8 chars), it is
     /// replaced with the secure default and a warning is logged.
     pub fn from_env() -> Result<Self> {
-        let url =
-            std::env::var("CODER_URL").unwrap_or_else(|_| "http://localhost:7080".to_string());
-        let email = std::env::var("CODER_ADMIN_EMAIL")
-            .unwrap_or_else(|_| "admin@openflows.dev".to_string());
-        let raw_password = std::env::var("CODER_ADMIN_PASSWORD")
-            .unwrap_or_else(|_| SECURE_DEFAULT_PASSWORD.to_string());
+        let cfg = CoderConfig::init_from_env()?;
+        let url = cfg.url.clone();
+        let email = cfg.admin_email.clone();
+        let raw_password = cfg.admin_password.clone();
         let username =
             std::env::var("CODER_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
 
@@ -108,7 +108,7 @@ impl CoderBootstrapper {
         //     operate as that user instead of creating/logging in as admin.
         //     This lets the system run under any pre-existing Coder user
         //     (e.g. a GitHub-authenticated user) rather than hardcoding admin.
-        if let Ok(existing_token) = std::env::var("CODER_SESSION_TOKEN") {
+        if let Some(existing_token) = CoderConfig::init_from_env()?.session_token {
             if !existing_token.is_empty() {
                 let probe_client = self
                     .client
@@ -330,8 +330,9 @@ impl CoderBootstrapper {
     /// Returns Err if deletion failed — callers must fail bootstrap to avoid
     /// a name conflict when recreating the workspace.
     async fn delete_stale_nexus_workspace(client: &CoderClient) -> Result<()> {
-        let nexus_workspace_name = std::env::var("OPENFLOWS_NEXUS_WORKSPACE_NAME")
-            .unwrap_or_else(|_| "openflows-nexus".to_string());
+        let nexus_workspace_name = TenantConfig::init_from_env()?
+            .nexus_workspace_name
+            .unwrap_or_else(|| "openflows-nexus".to_string());
         let me = client.get_me().await.map_err(|e| {
             anyhow::anyhow!(
                 "Failed to resolve current user while checking for stale nexus workspace '{}': {}. \
@@ -429,29 +430,37 @@ impl CoderBootstrapper {
     /// ready. Callers must fail bootstrap on error so a deleted control plane
     /// is never left without a functional replacement.
     async fn create_nexus_workspace(client: &CoderClient) -> Result<()> {
-        let nexus_workspace_name = std::env::var("OPENFLOWS_NEXUS_WORKSPACE_NAME")
-            .unwrap_or_else(|_| "openflows-nexus".to_string());
-        let nexus_api_token = std::env::var("OPENFLOWS_NEXUS_API_TOKEN")
-            .or_else(|_| std::env::var("NEXUS_CODER_API_TOKEN"))
-            .unwrap_or_else(|_| client.token().to_string());
-        let repository = std::env::var("GITHUB_REPOSITORY").unwrap_or_else(|_| String::new());
+        let tenant_cfg = TenantConfig::init_from_env()?;
+        let github_cfg = GithubConfig::init_from_env()?;
+        let nexus_workspace_name = tenant_cfg
+            .nexus_workspace_name
+            .clone()
+            .unwrap_or_else(|| "openflows-nexus".to_string());
+        let nexus_api_token = tenant_cfg
+            .nexus_api_token
+            .clone()
+            .or_else(|| std::env::var("NEXUS_CODER_API_TOKEN").ok())
+            .unwrap_or_else(|| client.token().to_string());
+        let repository = github_cfg.repository.clone().unwrap_or_default();
         let repo_url = if repository.is_empty() {
             String::new()
         } else {
             format!("https://github.com/{}.git", repository)
         };
         let redis_url = "redis://redis:6379".to_string();
-        let tenant = std::env::var("OPENFLOWS_TENANT").unwrap_or_else(|_| "default".to_string());
-        let registry_json = match std::env::var("OPENFLOWS_REGISTRY_JSON") {
-            Ok(json) => json,
-            Err(_) => {
-                let path = std::env::var("OPENFLOWS_REGISTRY_PATH")
-                    .unwrap_or_else(|_| "orchestration/agent/registry.json".to_string());
+        let tenant = tenant_cfg.effective_tenant().to_string();
+        let registry_json = match tenant_cfg.registry_json.clone() {
+            Some(json) => json,
+            None => {
+                let path = tenant_cfg
+                    .registry_path
+                    .clone()
+                    .unwrap_or_else(|| "orchestration/agent/registry.json".to_string());
                 std::fs::read_to_string(&path).unwrap_or_default()
             }
         };
         let coder_url_for_workspace = client.base_url().replace("localhost", "coder");
-        let github_pat = std::env::var("GITHUB_TOKEN").unwrap_or_default();
+        let github_pat = github_cfg.token.clone().unwrap_or_default();
 
         let workspace = client
             .create_workspace(&CreateWorkspaceRequest {
@@ -713,7 +722,9 @@ impl CoderBootstrapper {
         let nexus_workspace_name = format!("openflows-nexus-{}", tenant_name);
         let repo_url = format!("https://github.com/{}.git", github_repo);
 
-        let github_pat = std::env::var("GITHUB_TOKEN").unwrap_or_default();
+        let github_pat = GithubConfig::init_from_env()?
+            .token
+            .unwrap_or_default();
         let workspace = client
             .create_workspace_for_user(
                 &tenant_user.id,

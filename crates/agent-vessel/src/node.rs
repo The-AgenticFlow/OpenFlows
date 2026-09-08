@@ -10,7 +10,7 @@ use config::{
     state::{
         full_ticket_key_flat, KEY_PENDING_PRS, KEY_TICKETS, KEY_TICKET_DEPLOYMENT, KEY_WORKER_SLOTS,
     },
-    Ticket, TicketStatus, WorkerSlot, WorkerStatus, ACTION_CI_FIX_NEEDED,
+    Envconfig, Ticket, TicketStatus, WorkerSlot, WorkerStatus, ACTION_CI_FIX_NEEDED,
     ACTION_CONFLICTS_DETECTED,
 };
 use openflows_notifier::{NotificationMessage, NotificationService};
@@ -38,10 +38,6 @@ pub struct VesselNode {
     poller: CiPoller,
     merger: PrMerger,
 }
-
-/// Environment variable for the workspace root directory.
-/// Used to locate worktrees for local conflict resolution.
-const ENV_WORKSPACE_ROOT: &str = "AGENTFLOW_WORKSPACE_ROOT";
 
 /// Maximum number of conflict resolution attempts before giving up.
 const MAX_CONFLICT_RESOLUTION_ATTEMPTS: u32 = 3;
@@ -71,17 +67,16 @@ impl VesselNode {
 
     pub fn from_env() -> Self {
         // Search for registry in OPENFLOWS_HOME first, then workspace root, then CWD
-        let openflows_home = std::env::var("OPENFLOWS_HOME")
-            .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.openflows", h)))
-            .or_else(|_| std::env::var("USERPROFILE").map(|h| format!("{}/.openflows", h)))
-            .unwrap_or_else(|_| ".openflows".to_string());
-        let oh_path = std::path::PathBuf::from(&openflows_home)
+        let oh_path = config::TenantConfig::init_from_env()
+            .map(|tenant| tenant.openflows_home())
+            .unwrap_or_else(|_| std::path::PathBuf::from(".openflows"))
             .join("orchestration")
             .join("agent")
             .join("registry.json");
-        let workspace_root = std::env::var("AGENTFLOW_WORKSPACE_ROOT")
-            .map(std::path::PathBuf::from)
-            .ok();
+        let workspace_root = config::AgentConfig::init_from_env()
+            .ok()
+            .and_then(|agent| agent.effective_workspace_root())
+            .map(std::path::PathBuf::from);
         let ws_path = workspace_root
             .as_ref()
             .map(|p| p.join("orchestration").join("agent").join("registry.json"));
@@ -126,7 +121,9 @@ impl VesselNode {
     }
 
     fn resolve_worktree_path(&self, pr_info: &PrInfo) -> Option<PathBuf> {
-        let workspace_root = std::env::var(ENV_WORKSPACE_ROOT).ok()?;
+        let workspace_root = config::AgentConfig::init_from_env()
+            .ok()
+            .and_then(|agent| agent.effective_workspace_root())?;
         let branch = &pr_info.head_branch;
         let parts: Vec<&str> = branch.splitn(2, '/').collect();
         if parts.len() != 2 {
@@ -151,8 +148,9 @@ impl VesselNode {
 
     async fn coder_client_from_store(store: &SharedStore) -> Option<CoderClient> {
         let coder_url: Option<String> = store.get_typed("coder_url").await;
-        let coder_token: Option<String> = std::env::var("CODER_SESSION_TOKEN")
+        let coder_token: Option<String> = config::CoderConfig::init_from_env()
             .ok()
+            .and_then(|coder| coder.session_token)
             .or_else(|| std::env::var("CODER_API_TOKEN").ok());
         let coder_token = if coder_token.as_deref().is_some_and(|t| !t.is_empty()) {
             coder_token
@@ -1715,7 +1713,10 @@ impl VesselNode {
         conflicted_files: &[String],
         fallback_ticket_id: Option<&str>,
     ) -> bool {
-        let workspace_root = match std::env::var(ENV_WORKSPACE_ROOT).ok() {
+        let workspace_root = match config::AgentConfig::init_from_env()
+            .ok()
+            .and_then(|agent| agent.effective_workspace_root())
+        {
             Some(root) => root,
             None => {
                 warn!("AGENTFLOW_WORKSPACE_ROOT not set — cannot write CONFLICT_RESOLUTION.md");
@@ -2306,7 +2307,10 @@ impl VesselNode {
         reason: &str,
         failure_detail: Option<&github::CiFailureDetail>,
     ) -> bool {
-        let workspace_root = match std::env::var(ENV_WORKSPACE_ROOT).ok() {
+        let workspace_root = match config::AgentConfig::init_from_env()
+            .ok()
+            .and_then(|agent| agent.effective_workspace_root())
+        {
             Some(root) => root,
             None => {
                 warn!("AGENTFLOW_WORKSPACE_ROOT not set — cannot write CI_FIX.md");

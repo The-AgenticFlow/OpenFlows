@@ -40,7 +40,9 @@ pub async fn start_a2a_relay(store: Arc<SharedStore>) -> Result<Arc<A2ARelay>> {
     let relay = Arc::new(A2ARelay::new(store));
     let router = create_router(relay.clone());
 
-    let addr = std::env::var("A2A_RELAY_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let addr = config::EnvConfig::from_env()
+        .map(|c| c.infra.a2a_relay_addr)
+        .unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!(
         addr = %addr,

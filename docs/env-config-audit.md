@@ -53,6 +53,7 @@ the new centralized `crates/config/src/env.rs` layer.
 | `GITHUB_TOKEN` | agent-nexus | in-use | `GithubConfig.token` |
 | `GITHUB_REPOSITORY` | coder-client, nexus, binary | required | `GithubConfig.repository` |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | coder-client, agent-lore, vessel, config | required | `GithubConfig.personal_access_token`; `effective_token()` |
+| `GITHUB_API_BASE` | github/rest | in-use | `GithubConfig.api_base` (default `https://api.github.com`); `GithubRestClient::new` resolves it via `GithubConfig::init_from_env()` |
 | `USE_AI_GATEWAY` | config/registry | in-use | `AgentConfig.use_ai_gateway` |
 | `DEFAULT_CLI` | config/registry | in-use | keep (registry-specific) |
 | `SLACK_WEBHOOK_URL` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
@@ -87,6 +88,12 @@ The following config was intentionally left out of `config::env` in issue #185:
    time (kept only as a deprecated alias for now).
 2. Reconcile `OPENFLOWS_NEXUS_API_TOKEN` vs `NEXUS_CODER_API_TOKEN`.
 3. Remove docker-compose-only vars from Rust-facing documentation.
-4. Migrate remaining inline `std::env::var` reads in the agent crates onto the
+4. ~~Migrate remaining inline `std::env::var` reads in the agent crates onto the
    centralized accessors (`CoderConfig`, `InfraConfig`, `TenantConfig`,
-   `GithubConfig`, `AgentConfig`).
+   `GithubConfig`, `AgentConfig`).~~ **Done** — all remaining reads that belong to
+   a centralized variable now route through the `config::env` structs. The only
+   reads left are documented exclusions (e.g. `CODER_API_TOKEN`,
+   `CODER_TRANSPORT_VERBOSE`, `CODER_WORKSPACE_ID`, notifier vars, `ARTIFACTS_DIR`,
+   `TF_VAR_dev_binary_host_path`, `HOME`/`USERPROFILE`), dynamic keys, and
+   `OPENFLOWS_TAR` in `coder-client/build.rs` (build scripts can only use
+   `[build-dependencies]`, so the central `config` crate is not reachable there).

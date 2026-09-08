@@ -30,8 +30,9 @@ impl A2AClient {
     /// workspace that omits `A2A_RELAY_ADDR` would otherwise silently target
     /// its own interface (issue #143 / PR review), so it warns here.
     pub fn new(pair_id: String, role: String) -> Result<Self> {
-        let relay_addr = match std::env::var("A2A_RELAY_ADDR") {
-            Ok(addr) if !addr.trim().is_empty() => addr,
+        let env = config::EnvConfig::from_env()?;
+        let relay_addr = match env.infra.a2a_relay_addr.as_str() {
+            addr if !addr.trim().is_empty() => addr.to_string(),
             _ => {
                 warn!(
                     "A2A_RELAY_ADDR is not set; defaulting to 127.0.0.1:3000. \

@@ -176,6 +176,9 @@ pub struct GithubConfig {
 
     #[envconfig(from = "GITHUB_PERSONAL_ACCESS_TOKEN")]
     pub personal_access_token: Option<String>,
+
+    #[envconfig(from = "GITHUB_API_BASE", default = "https://api.github.com")]
+    pub api_base: String,
 }
 
 impl GithubConfig {

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use config::Registry;
+use config::Envconfig;
 use pocketflow_core::{CiPollConfig, MergeMethod};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -32,8 +33,14 @@ impl VesselConfig {
     }
 
     pub fn from_env() -> Self {
-        let github_token = std::env::var("GITHUB_TOKEN")
-            .or_else(|_| std::env::var("CODER_GITHUB_TOKEN"))
+        let github_token = config::GithubConfig::init_from_env()
+            .ok()
+            .and_then(|g| g.token)
+            .or_else(|| {
+                config::CoderConfig::init_from_env()
+                    .ok()
+                    .and_then(|c| c.github_token)
+            })
             .unwrap_or_default();
 
         Self {

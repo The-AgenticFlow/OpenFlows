@@ -2,6 +2,7 @@
 //! Diagnostic checks shared by `openflows doctor` and `openflows-doctor`.
 
 use anyhow::Result;
+use config::Envconfig;
 
 pub async fn run_checks() -> Result<()> {
     let mut all_pass = true;
@@ -10,8 +11,7 @@ pub async fn run_checks() -> Result<()> {
     println!();
 
     // 1. Coder server reachable
-    let coder_url =
-        std::env::var("CODER_URL").unwrap_or_else(|_| "http://localhost:7080".to_string());
+    let coder_url = config::CoderConfig::init_from_env()?.url;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
@@ -43,13 +43,14 @@ pub async fn run_checks() -> Result<()> {
     }
 
     // 2. Coder image tag
-    let tag = std::env::var("CODER_IMAGE_TAG").unwrap_or_else(|_| "latest".to_string());
+    let tag = config::CoderConfig::init_from_env()?.image_tag;
     println!("  ℹ Coder image tag: {} (pin for production)", tag);
 
     // 3. LLM provider/model configured
     {
-        let token = std::env::var("CODER_SESSION_TOKEN")
-            .or_else(|_| std::env::var("CODER_API_TOKEN"))
+        let token = config::CoderConfig::init_from_env()?
+            .session_token
+            .or(std::env::var("CODER_API_TOKEN").ok())
             .unwrap_or_default();
         if !token.is_empty() {
             let client = reqwest::Client::builder()
@@ -108,8 +109,7 @@ pub async fn run_checks() -> Result<()> {
     }
 
     // 5. Redis reachable
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let redis_url = config::InfraConfig::init_from_env()?.effective_redis_url();
     match pocketflow_core::SharedStore::new_redis(&redis_url).await {
         Ok(_) => println!("  ✓ Redis SharedStore reachable at {}", redis_url),
         Err(e) => {

@@ -397,6 +397,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64",
+ "config",
+ "envconfig",
  "futures",
  "futures-util",
  "reqwest",
@@ -772,6 +774,7 @@ name = "github"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "config",
  "pocketflow-core",
  "rand 0.8.6",
  "regex",
@@ -1387,6 +1390,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "config",
  "fred",
  "futures",
  "serde",

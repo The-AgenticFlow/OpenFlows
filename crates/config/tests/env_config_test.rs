@@ -1,6 +1,6 @@
 //! Integration tests for the centralized `config::env` layer (issue #185).
 
-use config::{CoderConfig, EnvConfig, InfraConfig, TenantConfig};
+use config::{CoderConfig, EnvConfig, GithubConfig, InfraConfig, TenantConfig};
 use envconfig::Envconfig;
 use std::sync::Mutex;
 
@@ -85,6 +85,21 @@ fn infra_defaults_applied() {
     assert_eq!(cfg.redis_url, None);
     assert_eq!(cfg.effective_redis_url(), "redis://localhost:6379");
     assert_eq!(cfg.a2a_relay_addr, "127.0.0.1:3000");
+}
+
+#[test]
+fn github_config_api_base_default_and_override() {
+    let _g = ENV_LOCK.lock().unwrap();
+    let guard = EnvGuard::capture(&["GITHUB_API_BASE"]);
+    guard.unset_all();
+    let cfg = GithubConfig::init_from_env().unwrap();
+    assert_eq!(cfg.api_base, "https://api.github.com");
+
+    unsafe {
+        std::env::set_var("GITHUB_API_BASE", "https://ghe.example.com/api/v3");
+    }
+    let cfg = GithubConfig::init_from_env().unwrap();
+    assert_eq!(cfg.api_base, "https://ghe.example.com/api/v3");
 }
 
 #[test]
