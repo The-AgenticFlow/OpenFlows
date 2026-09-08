@@ -54,9 +54,7 @@ impl LoreConfig {
         let registry = Registry::load(registry_path)?;
         let github_token = registry.resolve_github_token("lore")?;
 
-        let workspace_root = std::env::var("AGENTFLOW_WORKSPACE_ROOT")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+        let workspace_root = env_workspace_root();
         let persona_path = workspace_root
             .join("orchestration")
             .join("agent")
@@ -72,9 +70,8 @@ impl LoreConfig {
     }
 
     pub fn from_env() -> Self {
-        let workspace_root = std::env::var("AGENTFLOW_WORKSPACE_ROOT")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+        let env = config::EnvConfig::from_env().ok();
+        let workspace_root = env_workspace_root();
         let persona_path = workspace_root
             .join("orchestration")
             .join("agent")
@@ -102,13 +99,17 @@ impl LoreConfig {
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, registry = %path.display(), "LORE failed to resolve token from registry, falling back");
-                        std::env::var("GITHUB_TOKEN").unwrap_or_default()
+                        env.as_ref()
+                            .and_then(|e| e.github.token.clone())
+                            .unwrap_or_default()
                     }
                 }
             }
             _ => {
                 tracing::warn!("LORE: registry.json not found, falling back to GITHUB_TOKEN");
-                std::env::var("GITHUB_TOKEN").unwrap_or_default()
+                env.as_ref()
+                    .and_then(|e| e.github.token.clone())
+                    .unwrap_or_default()
             }
         };
 
@@ -120,6 +121,17 @@ impl LoreConfig {
             github_token,
         }
     }
+}
+
+/// Resolve the effective workspace root from the centralized config, falling
+/// back to the current directory. Shared by the config constructors so the
+/// resolution logic is defined once.
+fn env_workspace_root() -> std::path::PathBuf {
+    config::EnvConfig::from_env()
+        .ok()
+        .and_then(|e| e.agent.effective_workspace_root())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

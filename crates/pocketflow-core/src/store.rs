@@ -177,9 +177,13 @@ impl SharedStore {
     /// Redis backend with explicit or derived tenant.
     /// If tenant is None, reads from OPENFLOWS_TENANT env var.
     pub async fn new_redis_with_tenant(url: &str, tenant: Option<String>) -> Result<Self> {
-        let resolved_tenant = tenant
-            .or_else(|| std::env::var("OPENFLOWS_TENANT").ok())
-            .unwrap_or_else(|| "default".to_string());
+        let resolved_tenant = if let Some(t) = tenant {
+            t
+        } else {
+            config::EnvConfig::from_env()
+                .map(|e| e.tenant.effective_tenant().to_string())
+                .unwrap_or_else(|_| "default".to_string())
+        };
 
         Ok(Self {
             backend: Backend::Redis(Arc::new(RedisBackend::new(url).await?)),

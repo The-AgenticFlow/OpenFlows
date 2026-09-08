@@ -1,5 +1,6 @@
 use crate::state::{Ticket, WorkerSlot, KEY_TICKETS, KEY_WORKER_SLOTS};
 use anyhow::Result;
+use config::Envconfig;
 use pocketflow_core::SharedStore;
 use std::collections::HashMap;
 
@@ -7,7 +8,7 @@ pub async fn debug_system() -> Result<()> {
     println!("=== AgentFlow Debug Info ===");
 
     // Check Redis / Store
-    let store = if let Ok(url) = std::env::var("REDIS_URL") {
+    let store = if let Some(url) = config::InfraConfig::init_from_env()?.redis_url {
         println!("Store: Redis ({})", url);
         SharedStore::new_redis(&url).await?
     } else {

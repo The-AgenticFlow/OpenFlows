@@ -9,6 +9,8 @@ description = "Client library for the Coder REST API"
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.22"
+config = { version = "0.2.0", path = "../config" }
+envconfig = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }

@@ -634,7 +634,12 @@ impl HarnessStore {
             std::env::var("CODER_WORKSPACE_ID").unwrap_or_else(|_| "unknown".to_string());
 
         // Get tenant for Redis namespacing
-        let tenant = std::env::var("OPENFLOWS_TENANT").context("OPENFLOWS_TENANT not set")?;
+        let env = config::EnvConfig::from_env()?;
+        let tenant = env
+            .tenant
+            .tenant
+            .clone()
+            .context("OPENFLOWS_TENANT not set")?;
 
         println!(
             "✓ Forge verify executor ready (workspace: {}, ticket: {})",

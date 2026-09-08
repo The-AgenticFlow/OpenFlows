@@ -45,6 +45,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # CLI / env
 dotenvy    = "0.15"
 
+# env config
+envconfig = "0.11"
+
 # yaml
 serde_yaml = "0.9"
 

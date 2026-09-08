@@ -271,21 +271,45 @@ impl NexusNode {
         registry.resolve_github_token("nexus")
     }
 
+    /// Best-effort GitHub token from the centralized config (`GITHUB_TOKEN`),
+    /// falling back to the `/tmp/github_token` file. Returns `None` when
+    /// neither is available so callers can decide how to degrade.
+    fn resolve_github_token_from_env_or_file(&self) -> Option<String> {
+        config::EnvConfig::from_env()
+            .ok()
+            .and_then(|e| e.github.token)
+            .filter(|t| !t.is_empty())
+            .or_else(|| {
+                std::fs::read_to_string("/tmp/github_token")
+                    .ok()
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+            })
+    }
+
     fn load_registry(&self) -> Result<Registry> {
         if self.registry_path.exists() {
             return Registry::load(&self.registry_path);
         }
 
-        if let Ok(path) = std::env::var("OPENFLOWS_REGISTRY_PATH") {
+        let tenant = config::EnvConfig::from_env().ok();
+
+        if let Some(path) = tenant
+            .as_ref()
+            .and_then(|t| t.tenant.registry_path.as_deref())
+        {
             let path = PathBuf::from(path);
             if path.exists() {
                 return Registry::load(path);
             }
         }
 
-        if let Ok(content) = std::env::var("OPENFLOWS_REGISTRY_JSON") {
-            let registry: Registry = serde_json::from_str(&content)
-                .context("Failed to parse OPENFLOWS_REGISTRY_JSON")?;
+        if let Some(content) = tenant
+            .as_ref()
+            .and_then(|t| t.tenant.registry_json.as_deref())
+        {
+            let registry: Registry =
+                serde_json::from_str(content).context("Failed to parse OPENFLOWS_REGISTRY_JSON")?;
             return Ok(registry);
         }
 
@@ -311,7 +335,10 @@ impl NexusNode {
     fn load_skills_for_role(&self, role: &str) -> String {
         let mut skills = Vec::new();
 
-        if let Ok(reg_json) = std::env::var("OPENFLOWS_REGISTRY_JSON") {
+        if let Some(reg_json) = config::EnvConfig::from_env()
+            .ok()
+            .and_then(|e| e.tenant.registry_json)
+        {
             if let Ok(registry) = serde_json::from_str::<config::Registry>(&reg_json) {
                 if let Some(entry) = registry.get(role) {
                     for skill_name in &entry.skills {
@@ -346,15 +373,12 @@ Before significant work, read the relevant skill file to understand the workflow
 
         let token = match self.resolve_github_token() {
             Ok(t) if !t.is_empty() => t,
-            Ok(_) | Err(_) => match std::env::var("GITHUB_TOKEN") {
-                Ok(t) if !t.is_empty() => t,
-                Ok(_) | Err(_) => match std::fs::read_to_string("/tmp/github_token") {
-                    Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
-                    Ok(_) | Err(_) => {
-                        warn!("GitHub token not configured, skipping issue sync");
-                        return Ok(());
-                    }
-                },
+            Ok(_) | Err(_) => match self.resolve_github_token_from_env_or_file() {
+                Some(t) => t,
+                None => {
+                    warn!("GitHub token not configured, skipping issue sync");
+                    return Ok(());
+                }
             },
         };
 
@@ -417,21 +441,15 @@ Before significant work, read the relevant skill file to understand the workflow
 
         let token = match self.resolve_github_token() {
             Ok(t) => t,
-            Err(_) => match std::env::var("GITHUB_TOKEN") {
-                Ok(t) if !t.is_empty() => {
-                    info!("Using GITHUB_TOKEN env var for PR sync");
+            Err(_) => match self.resolve_github_token_from_env_or_file() {
+                Some(t) => {
+                    info!("Using GITHUB_TOKEN env var / token file for PR sync");
                     t
                 }
-                Ok(_) | Err(_) => match std::fs::read_to_string("/tmp/github_token") {
-                    Ok(t) if !t.trim().is_empty() => {
-                        info!("Using /tmp/github_token file for PR sync");
-                        t.trim().to_string()
-                    }
-                    Ok(_) | Err(_) => {
-                        warn!("GitHub token not configured, skipping PR sync");
-                        return Ok(());
-                    }
-                },
+                None => {
+                    warn!("GitHub token not configured, skipping PR sync");
+                    return Ok(());
+                }
             },
         };
 
@@ -740,12 +758,13 @@ Before significant work, read the relevant skill file to understand the workflow
     }
 
     async fn coder_client_from_store(store: &SharedStore) -> Option<CoderClient> {
+        let coder_cfg = config::EnvConfig::from_env().ok();
         let coder_url: Option<String> = store
             .get_typed("coder_url")
             .await
-            .or_else(|| std::env::var("CODER_URL").ok());
-        let coder_token: Option<String> = std::env::var("CODER_SESSION_TOKEN")
-            .ok()
+            .or_else(|| coder_cfg.as_ref().map(|e| e.coder.url.clone()));
+        let coder_token: Option<String> = coder_cfg
+            .and_then(|e| e.coder.session_token)
             .or_else(|| std::env::var("CODER_API_TOKEN").ok());
         let coder_token = if coder_token.as_deref().is_some_and(|t| !t.is_empty()) {
             coder_token
@@ -876,8 +895,14 @@ Before significant work, read the relevant skill file to understand the workflow
                 "role": worker_id,
                 "ticket_id": ticket_id,
                 "redis_url": "redis://redis:6379",
-                "tenant": std::env::var("OPENFLOWS_TENANT").unwrap_or_else(|_| "default".to_string()),
-                "coder_url": coder_url.unwrap_or_else(|| std::env::var("CODER_URL").unwrap_or_default()),
+                "tenant": config::EnvConfig::from_env()
+                    .map(|e| e.tenant.effective_tenant().to_string())
+                    .unwrap_or_else(|_| "default".to_string()),
+                "coder_url": coder_url.unwrap_or_else(|| {
+                    config::EnvConfig::from_env()
+                        .map(|e| e.coder.url)
+                        .unwrap_or_default()
+                }),
             }),
         };
         // Inject the Terraform variable the template reads.
@@ -1311,7 +1336,9 @@ Before significant work, read the relevant skill file to understand the workflow
         // when the hook rewrites or overrides initial prompts.
         // The hook's stdout becomes the session context automatically in Claude Code.
         use coder_client::types::{build_chat_labels, CreateChatRequest};
-        let tenant = std::env::var("OPENFLOWS_TENANT").unwrap_or_else(|_| "default".to_string());
+        let tenant = config::EnvConfig::from_env()
+            .map(|e| e.tenant.effective_tenant().to_string())
+            .unwrap_or_else(|_| "default".to_string());
         let labels = build_chat_labels(ticket_id, role, "openflows", &tenant);
 
         // Resolve the default organization ID required by the Coder chats API.
@@ -2443,16 +2470,13 @@ Use `openflows-harness` for all coordination:
 
         let token = match self.resolve_github_token() {
             Ok(t) if !t.is_empty() => t,
-            Ok(_) | Err(_) => match std::env::var("GITHUB_TOKEN") {
-                Ok(t) if !t.is_empty() => t,
-                Ok(_) | Err(_) => match std::fs::read_to_string("/tmp/github_token") {
-                    Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
-                    Ok(_) | Err(_) => {
-                        warn!("GitHub token not configured, assuming CI is ready");
-                        store.set(KEY_CI_READINESS, json!(CiReadiness::Ready)).await;
-                        return CiReadiness::Ready;
-                    }
-                },
+            Ok(_) | Err(_) => match self.resolve_github_token_from_env_or_file() {
+                Some(t) => t,
+                None => {
+                    warn!("GitHub token not configured, assuming CI is ready");
+                    store.set(KEY_CI_READINESS, json!(CiReadiness::Ready)).await;
+                    return CiReadiness::Ready;
+                }
             },
         };
 
@@ -2479,7 +2503,10 @@ Use `openflows-harness` for all coordination:
     /// Checks common workspace locations like ~/Sandbox/{repo_name}
     fn detect_workspace_path(_owner: &str, repo_name: &str) -> std::path::PathBuf {
         // Check for WORKSPACE_ROOT environment variable first
-        if let Ok(workspace_root) = std::env::var("WORKSPACE_ROOT") {
+        if let Some(workspace_root) = config::EnvConfig::from_env()
+            .ok()
+            .and_then(|e| e.agent.effective_workspace_root())
+        {
             let path = std::path::PathBuf::from(workspace_root).join(repo_name);
             if path.exists() {
                 return path;
@@ -3750,14 +3777,16 @@ impl Node for NexusNode {
             warn!("Failed to sync registry: {}", e);
         }
 
-        let repository = if let Ok(repo) = std::env::var("GITHUB_REPOSITORY") {
-            repo
-        } else {
-            store
+        let repository = match config::EnvConfig::from_env()
+            .ok()
+            .and_then(|e| e.github.repository)
+        {
+            Some(repo) => repo,
+            None => store
                 .get("repository")
                 .await
                 .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_default()
+                .unwrap_or_default(),
         };
 
         // Store repository in Redis so workspace provisioning can use it

@@ -25,6 +25,8 @@ pub mod mock_chat_server;
 pub use types::*;
 
 use anyhow::{bail, Context, Result};
+use config::{GithubConfig, TenantConfig};
+use envconfig::Envconfig;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -1533,8 +1535,9 @@ impl CoderClient {
 
         // Build naming convention: {role}-{ticket_id} — ticket_id already includes "T-" prefix
         let workspace_name = format!("{}-{}", role, ticket_id);
-        let repository: String =
-            std::env::var("GITHUB_REPOSITORY").unwrap_or_else(|_| "openflows/target".to_string());
+        let repository: String = GithubConfig::init_from_env()?
+            .repository
+            .unwrap_or_else(|| "openflows/target".to_string());
         let repo_url = format!("https://github.com/{}.git", repository);
         let template_name = format!("openflows-{}", role);
 
@@ -1576,7 +1579,9 @@ impl CoderClient {
         let model_config_id = None;
 
         // Create chat with OpenFlows labels (includes tenant)
-        let tenant = std::env::var("OPENFLOWS_TENANT").unwrap_or_else(|_| "default".to_string());
+        let tenant = TenantConfig::init_from_env()?
+            .effective_tenant()
+            .to_string();
         let labels = build_chat_labels(ticket_id, role, "openflows", &tenant);
         let chat_req = CreateChatRequest {
             organization_id,

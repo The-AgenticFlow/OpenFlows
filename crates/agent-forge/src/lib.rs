@@ -12,7 +12,7 @@ use config::{
         full_ticket_key, full_ticket_key_flat, KEY_PENDING_PRS, KEY_TICKETS, KEY_TICKET_CHAT,
         KEY_TICKET_CHAT_ACTION, KEY_TICKET_STATUS, KEY_WORKER_SLOTS,
     },
-    Ticket, TicketStatus, WorkerSlot, ACTION_FAILED, ACTION_PR_OPENED,
+    Envconfig, Ticket, TicketStatus, WorkerSlot, ACTION_FAILED, ACTION_PR_OPENED,
 };
 use pocketflow_core::{node::PAUSE_SIGNAL, Action, BatchNode, SharedStore};
 use serde::{Deserialize, Serialize};
@@ -73,12 +73,13 @@ impl ForgePairNode {
     }
 
     async fn coder_client_from_store(store: &SharedStore) -> Option<CoderClient> {
+        let coder = config::CoderConfig::init_from_env().ok();
         let coder_url: Option<String> = store
             .get_typed("coder_url")
             .await
-            .or_else(|| std::env::var("CODER_URL").ok());
-        let coder_token: Option<String> = std::env::var("CODER_SESSION_TOKEN")
-            .ok()
+            .or_else(|| coder.as_ref().map(|c| c.url.clone()));
+        let coder_token: Option<String> = coder
+            .and_then(|c| c.session_token)
             .or_else(|| std::env::var("CODER_API_TOKEN").ok());
         let coder_token = if coder_token.as_deref().is_some_and(|t| !t.is_empty()) {
             coder_token
