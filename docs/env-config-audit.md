@@ -24,9 +24,9 @@ the new centralized `crates/config/src/env.rs` layer.
 | `CODER_URL` | coder-client, agent-sentinel, agent-nexus, agent-forge, binary | in-use · duplicated | Centralize default (`http://localhost:7080`) in `CoderConfig.url` |
 | `CODER_SESSION_TOKEN` | coder-client, sentinel, nexus, forge, vessel, binary | required | `CoderConfig.session_token`; required in controller |
 | `CODER_API_TOKEN` | sentinel, nexus, forge, vessel, binary/doctor | legacy-alias | **Excluded from centralized layer** (duplicate of `CODER_SESSION_TOKEN`); callers keep their inline fallback |
-| `CODER_ADMIN_USERNAME` | coder-client/bootstrap | stale | **Removed** — Coder signs in by email, not username |
+| `CODER_ADMIN_USERNAME` | coder-client/bootstrap | in-use | `CoderConfig.admin_username` (default `admin`) |
 | `CODER_ADMIN_EMAIL` | coder-client/bootstrap | in-use | `CoderConfig.admin_email` (default `admin@openflows.dev`) |
-| `CODER_ADMIN_PASSWORD` | coder-client/bootstrap | in-use | `CoderConfig.admin_password` (default `Op3nFl0ws!`) |
+| `CODER_ADMIN_PASSWORD` | coder-client/bootstrap | in-use | `CoderConfig.admin_password` (Option; no baked-in default — bootstrapper applies a secure fallback only when absent/weak) |
 | `CODER_GITHUB_TOKEN` | agent-vessel/types | in-use | `CoderConfig.github_token` |
 | `CODER_IMAGE_TAG` | binary/doctor | in-use | `CoderConfig.image_tag` (default `latest`) |
 | `CODER_TRANSPORT_VERBOSE` | provisioner/transport | confusing | **Excluded from centralized layer** |
@@ -54,7 +54,9 @@ the new centralized `crates/config/src/env.rs` layer.
 | `GITHUB_REPOSITORY` | coder-client, nexus, binary | required | `GithubConfig.repository` |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | coder-client, agent-lore, vessel, config | required | `GithubConfig.personal_access_token`; `effective_token()` |
 | `GITHUB_API_BASE` | github/rest | in-use | `GithubConfig.api_base` (default `https://api.github.com`); `GithubRestClient::new` resolves it via `GithubConfig::init_from_env()` |
-| `USE_AI_GATEWAY` | config/registry | in-use | `AgentConfig.use_ai_gateway` |
+| `USE_AI_GATEWAY` | config/registry | in-use | `AgentConfig.use_ai_gateway` (bool) |
+| `ROLE` | coder-client/bootstrap | in-use | `AgentConfig.role` |
+| `OPENFLOWS_CREATE_NEXUS_WORKSPACE` | coder-client/bootstrap | in-use | `AgentConfig.create_nexus_workspace` (bool; default enabled) |
 | `DEFAULT_CLI` | config/registry | in-use | keep (registry-specific) |
 | `SLACK_WEBHOOK_URL` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
 | `DISCORD_WEBHOOK_URL` | notifier | in-use | **Excluded from centralized layer** (notifier config removed) |
@@ -78,7 +80,6 @@ The following config was intentionally left out of `config::env` in issue #185:
   `WHATSAPP_*` vars: notifier config and its struct were removed entirely.
 - **`CODER_API_TOKEN`** — duplicate of `CODER_SESSION_TOKEN`; excluded (existing
   callers keep their inline fallback).
-- **`CODER_ADMIN_USERNAME`** — removed; Coder signs in by email, not username.
 - **`CODER_TRANSPORT_VERBOSE`** — excluded (inline read in provisioner only).
 - **`CODER_WORKSPACE_ID`** — excluded (inline read with default only).
 

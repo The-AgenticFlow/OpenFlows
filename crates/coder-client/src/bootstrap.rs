@@ -7,7 +7,7 @@
 
 use crate::{CoderClient, CreateWorkspaceRequest};
 use anyhow::Result;
-use config::{CoderConfig, GithubConfig, TenantConfig};
+use config::{CoderConfig, GithubConfig};
 use envconfig::Envconfig;
 use serde_json::json;
 use std::time::Duration;
@@ -19,10 +19,23 @@ pub struct CoderBootstrapper {
     admin_email: String,
     admin_password: String,
     admin_username: String,
+    /// Configuration loaded once at startup, reused across the bootstrap flow
+    /// instead of re-parsing `std::env::var(...)` per step.
+    env: Option<config::EnvConfig>,
 }
 
 /// Default admin password that meets Coder's security requirements.
 const SECURE_DEFAULT_PASSWORD: &str = "Op3nFl0ws!";
+
+/// Resolve an already-loaded [`config::EnvConfig`], falling back to parsing the
+/// process environment for callers (e.g. [`CoderBootstrapper::new`]) that were
+/// not constructed from the environment.
+fn load_env(env: Option<&config::EnvConfig>) -> Result<config::EnvConfig> {
+    match env {
+        Some(env) => Ok(env.clone()),
+        None => config::EnvConfig::from_env(),
+    }
+}
 
 /// Check whether a password meets Coder's minimum security requirements.
 ///
@@ -52,12 +65,11 @@ impl CoderBootstrapper {
     /// (uppercase, lowercase, digit, special character, min 8 chars), it is
     /// replaced with the secure default and a warning is logged.
     pub fn from_env() -> Result<Self> {
-        let cfg = CoderConfig::init_from_env()?;
-        let url = cfg.url.clone();
-        let email = cfg.admin_email.clone();
-        let raw_password = cfg.admin_password.clone();
-        let username =
-            std::env::var("CODER_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
+        let env = config::EnvConfig::from_env()?;
+        let url = env.coder.url.clone();
+        let email = env.coder.admin_email.clone();
+        let raw_password = env.coder.admin_password.clone().unwrap_or_default();
+        let username = env.coder.admin_username.clone();
 
         let password = if password_meets_coder_requirements(&raw_password) {
             raw_password
@@ -77,6 +89,7 @@ impl CoderBootstrapper {
             admin_email: email,
             admin_password: password,
             admin_username: username,
+            env: Some(env),
         })
     }
 
@@ -88,6 +101,7 @@ impl CoderBootstrapper {
             admin_email: email.to_string(),
             admin_password: password.to_string(),
             admin_username: username.to_string(),
+            env: None,
         }
     }
 
@@ -108,26 +122,33 @@ impl CoderBootstrapper {
         //     operate as that user instead of creating/logging in as admin.
         //     This lets the system run under any pre-existing Coder user
         //     (e.g. a GitHub-authenticated user) rather than hardcoding admin.
-        if let Some(existing_token) = CoderConfig::init_from_env()?.session_token {
-            if !existing_token.is_empty() {
-                let probe_client = self
-                    .client
-                    .with_token(existing_token.clone())
+        let existing_token = self
+            .env
+            .as_ref()
+            .and_then(|e| e.coder.session_token.clone())
+            .or_else(|| {
+                CoderConfig::init_from_env()
+                    .ok()
+                    .and_then(|c| c.session_token)
+            });
+        if let Some(existing_token) = existing_token.filter(|t| !t.is_empty()) {
+            let probe_client = self
+                .client
+                .with_token(existing_token.clone())
+                .with_session_token(&existing_token);
+            if let Ok(me) = probe_client.get_me().await {
+                info!(
+                    username = %me.username,
+                    user_id = %me.id,
+                    "  ✓ Reusing existing CODER_SESSION_TOKEN for user '{}' — skipping admin bootstrap",
+                    me.username
+                );
+                let api_key = probe_client.create_api_token(&me.id, "openflows").await?;
+                let client = probe_client
+                    .with_token(api_key.key.clone())
                     .with_session_token(&existing_token);
-                if let Ok(me) = probe_client.get_me().await {
-                    info!(
-                        username = %me.username,
-                        user_id = %me.id,
-                        "  ✓ Reusing existing CODER_SESSION_TOKEN for user '{}' — skipping admin bootstrap",
-                        me.username
-                    );
-                    let api_key = probe_client.create_api_token(&me.id, "openflows").await?;
-                    let client = probe_client
-                        .with_token(api_key.key.clone())
-                        .with_session_token(&existing_token);
-                    info!("  ✓ API token generated for '{}'", me.username);
-                    return Self::push_templates_and_create_nexus(client).await;
-                }
+                info!("  ✓ API token generated for '{}'", me.username);
+                return Self::push_templates_and_create_nexus(client, self.env.as_ref()).await;
             }
         }
 
@@ -186,13 +207,16 @@ impl CoderBootstrapper {
             .with_session_token(&session_token);
         info!("  ✓ API token generated");
 
-        Self::push_templates_and_create_nexus(client).await
+        Self::push_templates_and_create_nexus(client, self.env.as_ref()).await
     }
 
     /// Shared post-auth logic: push templates and create the nexus workspace.
     /// Used by both the "reuse existing token" fast path and the full admin
     /// bootstrap path.
-    async fn push_templates_and_create_nexus(client: CoderClient) -> Result<CoderClient> {
+    async fn push_templates_and_create_nexus(
+        client: CoderClient,
+        env: Option<&config::EnvConfig>,
+    ) -> Result<CoderClient> {
         let resolved_user = client.resolve_current_user().await?;
         info!(
             username = %resolved_user,
@@ -208,10 +232,9 @@ impl CoderBootstrapper {
         // Check whether nexus workspace creation is enabled before deleting
         // any stale workspace. If creation is disabled, we must preserve the
         // existing one.
-        let create_nexus_workspace = std::env::var("OPENFLOWS_CREATE_NEXUS_WORKSPACE")
-            .map(|v| v != "false")
-            .unwrap_or(true)
-            && std::env::var("ROLE").as_deref() != Ok("nexus");
+        let env_cfg = load_env(env)?;
+        let create_nexus_workspace = env_cfg.agent.create_nexus_workspace.unwrap_or(true)
+            && env_cfg.agent.role.as_deref() != Some("nexus");
 
         // Track template push failures — bootstrap must fail if required
         // templates cannot be pushed, so the caller knows provisioning is
@@ -287,7 +310,7 @@ impl CoderBootstrapper {
         // OPENFLOWS_CREATE_NEXUS_WORKSPACE=false or ROLE=nexus, preserving
         // the existing control plane avoids a window with no workspace.
         if nexus_template_updated && create_nexus_workspace {
-            Self::delete_stale_nexus_workspace(&client).await?;
+            Self::delete_stale_nexus_workspace(&client, env).await?;
         }
 
         // Create or refresh the long-lived Nexus workspace outside Coder.
@@ -295,7 +318,7 @@ impl CoderBootstrapper {
         // This is the bootstrapper's "first mover" responsibility: seed the
         // persistent control-plane workspace that runs the orchestration loop.
         if create_nexus_workspace {
-            Self::create_nexus_workspace(&client).await?;
+            Self::create_nexus_workspace(&client, env).await?;
         }
 
         info!("  ✓ Coder bootstrapped");
@@ -329,8 +352,13 @@ impl CoderBootstrapper {
     /// Returns Ok if no workspace existed, or after successful deletion.
     /// Returns Err if deletion failed — callers must fail bootstrap to avoid
     /// a name conflict when recreating the workspace.
-    async fn delete_stale_nexus_workspace(client: &CoderClient) -> Result<()> {
-        let nexus_workspace_name = TenantConfig::init_from_env()?
+    async fn delete_stale_nexus_workspace(
+        client: &CoderClient,
+        env: Option<&config::EnvConfig>,
+    ) -> Result<()> {
+        let env_cfg = load_env(env)?;
+        let nexus_workspace_name = env_cfg
+            .tenant
             .nexus_workspace_name
             .unwrap_or_else(|| "openflows-nexus".to_string());
         let me = client.get_me().await.map_err(|e| {
@@ -429,9 +457,13 @@ impl CoderBootstrapper {
     /// Returns Err if the workspace could not be created or did not become
     /// ready. Callers must fail bootstrap on error so a deleted control plane
     /// is never left without a functional replacement.
-    async fn create_nexus_workspace(client: &CoderClient) -> Result<()> {
-        let tenant_cfg = TenantConfig::init_from_env()?;
-        let github_cfg = GithubConfig::init_from_env()?;
+    async fn create_nexus_workspace(
+        client: &CoderClient,
+        env: Option<&config::EnvConfig>,
+    ) -> Result<()> {
+        let env_cfg = load_env(env)?;
+        let tenant_cfg = &env_cfg.tenant;
+        let github_cfg = &env_cfg.github;
         let nexus_workspace_name = tenant_cfg
             .nexus_workspace_name
             .clone()
@@ -722,7 +754,12 @@ impl CoderBootstrapper {
         let nexus_workspace_name = format!("openflows-nexus-{}", tenant_name);
         let repo_url = format!("https://github.com/{}.git", github_repo);
 
-        let github_pat = GithubConfig::init_from_env()?.token.unwrap_or_default();
+        let github_pat = self
+            .env
+            .as_ref()
+            .and_then(|e| e.github.token.clone())
+            .or_else(|| GithubConfig::init_from_env().ok().and_then(|c| c.token))
+            .unwrap_or_default();
         let workspace = client
             .create_workspace_for_user(
                 &tenant_user.id,

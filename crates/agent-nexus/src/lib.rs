@@ -271,6 +271,22 @@ impl NexusNode {
         registry.resolve_github_token("nexus")
     }
 
+    /// Best-effort GitHub token from the centralized config (`GITHUB_TOKEN`),
+    /// falling back to the `/tmp/github_token` file. Returns `None` when
+    /// neither is available so callers can decide how to degrade.
+    fn resolve_github_token_from_env_or_file(&self) -> Option<String> {
+        config::EnvConfig::from_env()
+            .ok()
+            .and_then(|e| e.github.token)
+            .filter(|t| !t.is_empty())
+            .or_else(|| {
+                std::fs::read_to_string("/tmp/github_token")
+                    .ok()
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+            })
+    }
+
     fn load_registry(&self) -> Result<Registry> {
         if self.registry_path.exists() {
             return Registry::load(&self.registry_path);
@@ -357,21 +373,13 @@ Before significant work, read the relevant skill file to understand the workflow
 
         let token = match self.resolve_github_token() {
             Ok(t) if !t.is_empty() => t,
-            Ok(_) | Err(_) => {
-                match config::EnvConfig::from_env()
-                    .ok()
-                    .and_then(|e| e.github.token)
-                {
-                    Some(t) if !t.is_empty() => t,
-                    _ => match std::fs::read_to_string("/tmp/github_token") {
-                        Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
-                        Ok(_) | Err(_) => {
-                            warn!("GitHub token not configured, skipping issue sync");
-                            return Ok(());
-                        }
-                    },
+            Ok(_) | Err(_) => match self.resolve_github_token_from_env_or_file() {
+                Some(t) => t,
+                None => {
+                    warn!("GitHub token not configured, skipping issue sync");
+                    return Ok(());
                 }
-            }
+            },
         };
 
         let client = github::GithubRestClient::new(&token);
@@ -433,24 +441,15 @@ Before significant work, read the relevant skill file to understand the workflow
 
         let token = match self.resolve_github_token() {
             Ok(t) => t,
-            Err(_) => match config::EnvConfig::from_env()
-                .ok()
-                .and_then(|e| e.github.token)
-            {
-                Some(t) if !t.is_empty() => {
-                    info!("Using GITHUB_TOKEN env var for PR sync");
+            Err(_) => match self.resolve_github_token_from_env_or_file() {
+                Some(t) => {
+                    info!("Using GITHUB_TOKEN env var / token file for PR sync");
                     t
                 }
-                _ => match std::fs::read_to_string("/tmp/github_token") {
-                    Ok(t) if !t.trim().is_empty() => {
-                        info!("Using /tmp/github_token file for PR sync");
-                        t.trim().to_string()
-                    }
-                    Ok(_) | Err(_) => {
-                        warn!("GitHub token not configured, skipping PR sync");
-                        return Ok(());
-                    }
-                },
+                None => {
+                    warn!("GitHub token not configured, skipping PR sync");
+                    return Ok(());
+                }
             },
         };
 
@@ -2471,19 +2470,13 @@ Use `openflows-harness` for all coordination:
 
         let token = match self.resolve_github_token() {
             Ok(t) if !t.is_empty() => t,
-            Ok(_) | Err(_) => match config::EnvConfig::from_env()
-                .ok()
-                .and_then(|e| e.github.token)
-            {
-                Some(t) if !t.is_empty() => t,
-                _ => match std::fs::read_to_string("/tmp/github_token") {
-                    Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
-                    Ok(_) | Err(_) => {
-                        warn!("GitHub token not configured, assuming CI is ready");
-                        store.set(KEY_CI_READINESS, json!(CiReadiness::Ready)).await;
-                        return CiReadiness::Ready;
-                    }
-                },
+            Ok(_) | Err(_) => match self.resolve_github_token_from_env_or_file() {
+                Some(t) => t,
+                None => {
+                    warn!("GitHub token not configured, assuming CI is ready");
+                    store.set(KEY_CI_READINESS, json!(CiReadiness::Ready)).await;
+                    return CiReadiness::Ready;
+                }
             },
         };
 

@@ -178,16 +178,15 @@ impl Node for SentinelNode {
                                     "Sentinel chat still running — waiting for review"
                                 );
                             }
-                            ChatStatus::Waiting => {
+                            ChatStatus::Waiting
                                 if (last_action.as_deref() == Some("completed")
                                     || last_action.is_none())
-                                    && !has_review
-                                {
-                                    info!(
-                                        ticket_id = %ticket.id,
-                                        "Sentinel chat waiting but no review written yet — sending follow-up"
-                                    );
-                                }
+                                    && !has_review =>
+                            {
+                                info!(
+                                    ticket_id = %ticket.id,
+                                    "Sentinel chat waiting but no review written yet — sending follow-up"
+                                );
                             }
                             ChatStatus::Error => {
                                 warn!(

@@ -20,9 +20,7 @@ impl EnvGuard {
 
     fn unset_all(&self) {
         for (k, _) in &self.snapshots {
-            unsafe {
-                std::env::remove_var(k);
-            }
+            std::env::remove_var(k);
         }
     }
 }
@@ -31,12 +29,8 @@ impl Drop for EnvGuard {
     fn drop(&mut self) {
         for (k, v) in &self.snapshots {
             match v {
-                Some(val) => unsafe {
-                    std::env::set_var(k, val);
-                },
-                None => unsafe {
-                    std::env::remove_var(k);
-                },
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
             }
         }
     }
@@ -54,14 +48,13 @@ fn coder_config_parses_defaults_and_overrides() {
         "CODER_EXTERNAL_AUTH_0_CLIENT_SECRET",
     ]);
     guard.unset_all();
-    unsafe {
-        std::env::set_var("CODER_URL", "http://coder.internal:8080");
-        std::env::set_var("CODER_EXTERNAL_AUTH_0_CLIENT_ID", "github-app");
-    }
+    std::env::set_var("CODER_URL", "http://coder.internal:8080");
+    std::env::set_var("CODER_EXTERNAL_AUTH_0_CLIENT_ID", "github-app");
     let cfg = CoderConfig::init_from_env().unwrap();
     assert_eq!(cfg.url, "http://coder.internal:8080");
     assert_eq!(cfg.admin_email, "admin@openflows.dev");
-    assert_eq!(cfg.admin_password, "Op3nFl0ws!");
+    assert_eq!(cfg.admin_password, None);
+    assert_eq!(cfg.admin_username, "admin");
     assert_eq!(cfg.image_tag, "latest");
     assert_eq!(cfg.external_auth_client_id.as_deref(), Some("github-app"));
 }
@@ -95,9 +88,7 @@ fn github_config_api_base_default_and_override() {
     let cfg = GithubConfig::init_from_env().unwrap();
     assert_eq!(cfg.api_base, "https://api.github.com");
 
-    unsafe {
-        std::env::set_var("GITHUB_API_BASE", "https://ghe.example.com/api/v3");
-    }
+    std::env::set_var("GITHUB_API_BASE", "https://ghe.example.com/api/v3");
     let cfg = GithubConfig::init_from_env().unwrap();
     assert_eq!(cfg.api_base, "https://ghe.example.com/api/v3");
 }
@@ -111,11 +102,9 @@ fn env_config_from_env_and_controller_validation() {
         "GITHUB_REPOSITORY",
     ]);
     guard.unset_all();
-    unsafe {
-        std::env::set_var("CODER_SESSION_TOKEN", "fake-token");
-        std::env::set_var("OPENFLOWS_TENANT", "acme");
-        std::env::set_var("GITHUB_REPOSITORY", "acme/repo");
-    }
+    std::env::set_var("CODER_SESSION_TOKEN", "fake-token");
+    std::env::set_var("OPENFLOWS_TENANT", "acme");
+    std::env::set_var("GITHUB_REPOSITORY", "acme/repo");
     let env = EnvConfig::from_env().unwrap();
     assert!(env.validate_controller().is_ok());
     assert_eq!(env.tenant.effective_tenant(), "acme");

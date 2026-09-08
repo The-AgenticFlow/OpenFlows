@@ -19,9 +19,6 @@ use tracing::{debug, info, warn};
 const MAX_RETRIES: u32 = 3;
 const RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 
-/// Default GitHub REST API base URL, overridable via `GITHUB_API_BASE`.
-const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
-
 /// Direct GitHub REST API client for CI status polling and merge operations.
 #[derive(Clone)]
 pub struct GithubRestClient {
@@ -32,9 +29,11 @@ pub struct GithubRestClient {
 
 impl GithubRestClient {
     pub fn new(token: impl Into<String>) -> Self {
+        // The GitHub REST API base is configured via `GITHUB_API_BASE`, whose
+        // default (`https://api.github.com`) lives in `config::GithubConfig`.
         let api_base = config::GithubConfig::init_from_env()
             .map(|cfg| cfg.api_base)
-            .unwrap_or_else(|_| DEFAULT_GITHUB_API_BASE.to_string());
+            .unwrap_or_else(|_| "https://api.github.com".to_string());
         Self {
             client: reqwest::Client::builder()
                 .user_agent("AgentFlow-VESSEL/0.1")
@@ -43,13 +42,6 @@ impl GithubRestClient {
             token: token.into(),
             api_base,
         }
-    }
-
-    /// Override the GitHub REST API base URL (defaults to
-    /// `https://api.github.com`, configurable via `GITHUB_API_BASE`).
-    pub fn with_api_base(mut self, api_base: impl Into<String>) -> Self {
-        self.api_base = api_base.into();
-        self
     }
 
     fn auth_header(&self) -> String {

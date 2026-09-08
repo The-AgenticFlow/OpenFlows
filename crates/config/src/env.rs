@@ -26,8 +26,14 @@ pub struct CoderConfig {
     #[envconfig(from = "CODER_ADMIN_EMAIL", default = "admin@openflows.dev")]
     pub admin_email: String,
 
-    #[envconfig(from = "CODER_ADMIN_PASSWORD", default = "Op3nFl0ws!")]
-    pub admin_password: String,
+    /// Admin password for the initial Coder user. No default is baked in:
+    /// the bootstrapper applies its own secure fallback only when the value is
+    /// absent or fails Coder's password policy.
+    #[envconfig(from = "CODER_ADMIN_PASSWORD")]
+    pub admin_password: Option<String>,
+
+    #[envconfig(from = "CODER_ADMIN_USERNAME", default = "admin")]
+    pub admin_username: String,
 
     #[envconfig(from = "CODER_IMAGE_TAG", default = "latest")]
     pub image_tag: String,
@@ -56,6 +62,7 @@ impl fmt::Debug for CoderConfig {
             .field("session_token", &redact(&self.session_token))
             .field("admin_email", &self.admin_email)
             .field("admin_password", &"<redacted>")
+            .field("admin_username", &self.admin_username)
             .field("image_tag", &self.image_tag)
             .field("github_token", &redact(&self.github_token))
             .field("external_auth_client_id", &self.external_auth_client_id)
@@ -207,14 +214,28 @@ impl fmt::Debug for GithubConfig {
 /// Agent/workspace configuration.
 #[derive(Debug, Clone, Envconfig)]
 pub struct AgentConfig {
+    /// Preferred workspace root, sourced from `AGENTFLOW_WORKSPACE_ROOT`.
     #[envconfig(from = "AGENTFLOW_WORKSPACE_ROOT")]
     pub workspace_root: Option<String>,
 
+    /// Fallback workspace root sourced from the legacy `WORKSPACE_ROOT`
+    /// variable. [`AgentConfig::effective_workspace_root`] prefers
+    /// [`Self::workspace_root`] and only falls back to this one.
     #[envconfig(from = "WORKSPACE_ROOT")]
     pub legacy_workspace_root: Option<String>,
 
+    /// Whether the AI gateway is enabled.
     #[envconfig(from = "USE_AI_GATEWAY")]
-    pub use_ai_gateway: Option<String>,
+    pub use_ai_gateway: Option<bool>,
+
+    /// Whether the bootstrapper should create the Nexus control-plane
+    /// workspace. Defaults to enabled; only an explicit `false` disables it.
+    #[envconfig(from = "OPENFLOWS_CREATE_NEXUS_WORKSPACE")]
+    pub create_nexus_workspace: Option<bool>,
+
+    /// The role this process runs as (e.g. `nexus`).
+    #[envconfig(from = "ROLE")]
+    pub role: Option<String>,
 }
 
 impl AgentConfig {
@@ -225,11 +246,9 @@ impl AgentConfig {
             .or_else(|| self.legacy_workspace_root.clone())
     }
 
-    /// Whether the AI gateway is enabled. Accepts the same values the existing
-    /// registry parser does (`"true"` or `"1"`); anything else is treated as
-    /// disabled rather than aborting startup.
+    /// Whether the AI gateway is enabled.
     pub fn use_ai_gateway_enabled(&self) -> bool {
-        matches!(self.use_ai_gateway.as_deref(), Some("true" | "1"))
+        self.use_ai_gateway.unwrap_or(false)
     }
 }
 
@@ -334,9 +353,7 @@ mod tests {
 
         fn unset_all(&self) {
             for (k, _) in &self.snapshots {
-                unsafe {
-                    std::env::remove_var(k);
-                }
+                std::env::remove_var(k);
             }
         }
     }
@@ -345,12 +362,8 @@ mod tests {
         fn drop(&mut self) {
             for (k, v) in &self.snapshots {
                 match v {
-                    Some(val) => unsafe {
-                        std::env::set_var(k, val);
-                    },
-                    None => unsafe {
-                        std::env::remove_var(k);
-                    },
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
                 }
             }
         }
@@ -374,12 +387,14 @@ mod tests {
         let cfg = EnvConfig::from_env().unwrap();
         assert_eq!(cfg.coder.url, "http://localhost:7080");
         assert_eq!(cfg.coder.admin_email, "admin@openflows.dev");
-        assert_eq!(cfg.coder.admin_password, "Op3nFl0ws!");
+        assert_eq!(cfg.coder.admin_username, "admin");
+        assert_eq!(cfg.coder.admin_password, None);
         assert_eq!(cfg.coder.image_tag, "latest");
         assert_eq!(cfg.infra.effective_redis_url(), "redis://localhost:6379");
         assert_eq!(cfg.infra.a2a_relay_addr, "127.0.0.1:3000");
         assert_eq!(cfg.tenant.effective_tenant(), "default");
         assert_eq!(cfg.tenant.tar, "tar");
+        assert_eq!(cfg.agent.use_ai_gateway, None);
         assert!(!cfg.agent.use_ai_gateway_enabled());
     }
 
@@ -396,11 +411,9 @@ mod tests {
             ("CODER_URL", "http://coder.example.com:8080"),
             ("REDIS_URL", "redis://redis.example.com:6379"),
             ("OPENFLOWS_TENANT", "acme"),
-            ("USE_AI_GATEWAY", "1"),
+            ("USE_AI_GATEWAY", "true"),
         ] {
-            unsafe {
-                std::env::set_var(k, v);
-            }
+            std::env::set_var(k, v);
         }
         let cfg = EnvConfig::from_env().unwrap();
         assert_eq!(cfg.coder.url, "http://coder.example.com:8080");
@@ -413,19 +426,11 @@ mod tests {
     }
 
     #[test]
-    fn ai_gateway_accepts_previous_valid_values() {
+    fn ai_gateway_accepts_valid_values() {
         let _g = ENV_LOCK.lock().unwrap();
         let _guard = EnvGuard::capture(&["USE_AI_GATEWAY"]);
-        for (v, expected) in [
-            ("1", true),
-            ("true", true),
-            ("0", false),
-            ("false", false),
-            ("garbage", false),
-        ] {
-            unsafe {
-                std::env::set_var("USE_AI_GATEWAY", v);
-            }
+        for (v, expected) in [("true", true), ("false", false)] {
+            std::env::set_var("USE_AI_GATEWAY", v);
             let cfg = EnvConfig::from_env().unwrap();
             assert_eq!(
                 cfg.agent.use_ai_gateway_enabled(),
@@ -439,10 +444,8 @@ mod tests {
     fn debug_redacts_secrets() {
         let _g = ENV_LOCK.lock().unwrap();
         let _guard = EnvGuard::capture(&["CODER_SESSION_TOKEN", "CODER_ADMIN_PASSWORD"]);
-        unsafe {
-            std::env::set_var("CODER_SESSION_TOKEN", "s3cr3t-token");
-            std::env::set_var("CODER_ADMIN_PASSWORD", "hunter2");
-        }
+        std::env::set_var("CODER_SESSION_TOKEN", "s3cr3t-token");
+        std::env::set_var("CODER_ADMIN_PASSWORD", "hunter2");
         let cfg = EnvConfig::from_env().unwrap();
         let dbg = format!("{:?}", cfg.coder);
         assert!(dbg.contains("<redacted>"));
