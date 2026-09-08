@@ -278,14 +278,20 @@ impl NexusNode {
 
         let tenant = config::EnvConfig::from_env().ok();
 
-        if let Some(path) = tenant.as_ref().and_then(|t| t.tenant.registry_path.as_deref()) {
+        if let Some(path) = tenant
+            .as_ref()
+            .and_then(|t| t.tenant.registry_path.as_deref())
+        {
             let path = PathBuf::from(path);
             if path.exists() {
                 return Registry::load(path);
             }
         }
 
-        if let Some(content) = tenant.as_ref().and_then(|t| t.tenant.registry_json.as_deref()) {
+        if let Some(content) = tenant
+            .as_ref()
+            .and_then(|t| t.tenant.registry_json.as_deref())
+        {
             let registry: Registry =
                 serde_json::from_str(content).context("Failed to parse OPENFLOWS_REGISTRY_JSON")?;
             return Ok(registry);
@@ -352,7 +358,10 @@ Before significant work, read the relevant skill file to understand the workflow
         let token = match self.resolve_github_token() {
             Ok(t) if !t.is_empty() => t,
             Ok(_) | Err(_) => {
-                match config::EnvConfig::from_env().ok().and_then(|e| e.github.token) {
+                match config::EnvConfig::from_env()
+                    .ok()
+                    .and_then(|e| e.github.token)
+                {
                     Some(t) if !t.is_empty() => t,
                     _ => match std::fs::read_to_string("/tmp/github_token") {
                         Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
@@ -424,7 +433,10 @@ Before significant work, read the relevant skill file to understand the workflow
 
         let token = match self.resolve_github_token() {
             Ok(t) => t,
-            Err(_) => match config::EnvConfig::from_env().ok().and_then(|e| e.github.token) {
+            Err(_) => match config::EnvConfig::from_env()
+                .ok()
+                .and_then(|e| e.github.token)
+            {
                 Some(t) if !t.is_empty() => {
                     info!("Using GITHUB_TOKEN env var for PR sync");
                     t
@@ -2459,7 +2471,10 @@ Use `openflows-harness` for all coordination:
 
         let token = match self.resolve_github_token() {
             Ok(t) if !t.is_empty() => t,
-            Ok(_) | Err(_) => match config::EnvConfig::from_env().ok().and_then(|e| e.github.token) {
+            Ok(_) | Err(_) => match config::EnvConfig::from_env()
+                .ok()
+                .and_then(|e| e.github.token)
+            {
                 Some(t) if !t.is_empty() => t,
                 _ => match std::fs::read_to_string("/tmp/github_token") {
                     Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
@@ -3769,15 +3784,17 @@ impl Node for NexusNode {
             warn!("Failed to sync registry: {}", e);
         }
 
-        let repository =
-            match config::EnvConfig::from_env().ok().and_then(|e| e.github.repository) {
-                Some(repo) => repo,
-                None => store
-                    .get("repository")
-                    .await
-                    .and_then(|v| v.as_str().map(String::from))
-                    .unwrap_or_default(),
-            };
+        let repository = match config::EnvConfig::from_env()
+            .ok()
+            .and_then(|e| e.github.repository)
+        {
+            Some(repo) => repo,
+            None => store
+                .get("repository")
+                .await
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default(),
+        };
 
         // Store repository in Redis so workspace provisioning can use it
         if !repository.is_empty() {

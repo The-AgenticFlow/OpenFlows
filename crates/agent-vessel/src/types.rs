@@ -1,6 +1,6 @@
 use anyhow::Result;
-use config::Registry;
 use config::Envconfig;
+use config::Registry;
 use pocketflow_core::{CiPollConfig, MergeMethod};
 use serde::{Deserialize, Serialize};
 use std::path::Path;

@@ -12,7 +12,7 @@ use config::{
         full_ticket_key, full_ticket_key_flat, KEY_PENDING_PRS, KEY_TICKETS, KEY_TICKET_CHAT,
         KEY_TICKET_CHAT_ACTION, KEY_TICKET_STATUS, KEY_WORKER_SLOTS,
     },
-    Ticket, TicketStatus, WorkerSlot, ACTION_FAILED, ACTION_PR_OPENED, Envconfig,
+    Envconfig, Ticket, TicketStatus, WorkerSlot, ACTION_FAILED, ACTION_PR_OPENED,
 };
 use pocketflow_core::{node::PAUSE_SIGNAL, Action, BatchNode, SharedStore};
 use serde::{Deserialize, Serialize};

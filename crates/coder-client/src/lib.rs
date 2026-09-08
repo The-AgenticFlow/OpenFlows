@@ -1579,7 +1579,9 @@ impl CoderClient {
         let model_config_id = None;
 
         // Create chat with OpenFlows labels (includes tenant)
-        let tenant = TenantConfig::init_from_env()?.effective_tenant().to_string();
+        let tenant = TenantConfig::init_from_env()?
+            .effective_tenant()
+            .to_string();
         let labels = build_chat_labels(ticket_id, role, "openflows", &tenant);
         let chat_req = CreateChatRequest {
             organization_id,

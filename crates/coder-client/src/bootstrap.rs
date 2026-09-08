@@ -722,9 +722,7 @@ impl CoderBootstrapper {
         let nexus_workspace_name = format!("openflows-nexus-{}", tenant_name);
         let repo_url = format!("https://github.com/{}.git", github_repo);
 
-        let github_pat = GithubConfig::init_from_env()?
-            .token
-            .unwrap_or_default();
+        let github_pat = GithubConfig::init_from_env()?.token.unwrap_or_default();
         let workspace = client
             .create_workspace_for_user(
                 &tenant_user.id,
